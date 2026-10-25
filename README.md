@@ -97,7 +97,7 @@ cycling-source-upload-kit/
 
 ## 定时任务
 
-两个 cron 都在 07:30 跑，同步**前天**的数据：
+两个 cron 在**上午 11 点**依次跑（11:05 / 11:10），同步**前天**的数据：
 
 | 脚本 | 窗口 | 输出 |
 |---|---|---|
@@ -105,6 +105,23 @@ cycling-source-upload-kit/
 | `run-magene-igp-sync.py` | day-2 00:00~23:59 | 有新同步才输出 |
 
 > **cron 入口必须是 `~/.hermes/scripts/` 下的真文件** —— Hermes 的 cron 守卫会 `resolve()` 软链接并要求路径落在 scripts 目录内，软链出去会被拦。
+
+> **⚠️ `scripts/run-*-sync.py` 不是给独立使用者直接跑的。**
+> 它们是 [Hermes Agent](https://hermes-agent.nousresearch.com/docs) 的 cron 入口，依赖：
+> - `~/.hermes/scripts/_serial_lock.py`（全局串行锁，与其它任务共用）
+> - `~/.hermes/skills/cycling-data-upload/scripts/` 下的主脚本
+> - 本机的 token / 凭据文件
+>
+> 独立使用请直接跑主脚本（见「快速开始」），别用 `run-*.py`。
+
+### 全局串行锁
+
+所有 cron 任务共用 `~/.hermes/run/serial.lock`（`flock LOCK_EX | LOCK_NB`）：
+**抢不到锁就放弃本轮**，不排队、不堆叠 —— 保证多个任务「一个个进行」。
+
+```bash
+cat ~/.hermes/run/serial.lock   # 查看当前持锁者
+```
 
 ## 参考文档
 
