@@ -1,0 +1,315 @@
+---
+name: cycling-data-upload
+description: Use when uploading cycling FIT data to Strava, 行者/XOSS (imxingzhe.com), or IGPSPORT; when syncing 迈金/Magene, 顽鹿/OneLap, or Strava activities to a Chinese platform; when debugging duplicate activities, coordinate offsets (GCJ-02/WGS-84), FIT token refresh, or the daily 07:30 sync jobs. Covers Strava→行者, 迈金→IGPSPORT, and manual FIT→Strava upload.
+license: MIT
+version: 1.0.0
+---
+
+# 骑行数据上传（Strava / 行者 / IGPSPORT）
+
+三条上传链路的统一 skill。
+
+| 链路 | 方向 | 源 → 目标 | 坐标系 | 定时 job |
+|---|---|---|---|---|
+| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | `3670c2356238` 每天 07:30 |
+| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | `3e3e0194d61b` 每天 07:30 |
+| **C** | 本地 FIT → Strava | 用户发的 FIT → Strava API | **需转** GCJ-02→WGS-84 | 手动 |
+
+**坐标系是三条链路最大的差异 —— 详见下方「坐标系矩阵」，搞错就是 400-500m 偏移。**
+
+## 脚本（都在 `scripts/`）
+
+| 脚本 | 用途 |
+|---|---|
+| `strava-to-xingzhe-sync.py` | 链路 A 主脚本 |
+| `run-xingzhe-sync.py` | 链路 A cron 入口（前天单日窗口，无新活动零输出） |
+| `onelap_client.py` | 迈金/顽鹿 API 客户端（登录/列表/详情/FIT 下载/签名） |
+| `igp_client.py` | IGPSPORT API 客户端（短信登录/刷新/三步 OSS 上传/签名） |
+| `magene-to-igp.py` | 链路 B 主脚本 |
+| `run-magene-igp-sync.py` | 链路 B cron 入口 |
+| `strava-upload.py` | 链路 C 主脚本（手动上传单个 FIT） |
+
+## 凭据（**不含任何密钥**）
+
+本 skill **不携带任何密钥**。两个平台签名密钥改为**运行时从环境变量 / 本地文件读取**，缺失时脚本**报错退出**（绝不用默认值兜底）：
+
+| 变量 / 文件 | 用途 |
+|---|---|
+| `ONELAP_SIGN_KEY` → `~/.hermes/igp_sync/onelap_sign_key` | 顽鹿/迈金 API 签名 |
+| `IGP_HMAC_KEY` → `~/.hermes/igp_sync/hmac_key` | IGPSPORT 请求签名 |
+| `ONELAP_PASSWORD` → `~/.hermes/igp_sync/onelap_password` | 顽鹿密码（自动重登） |
+| `XINGZHE_CLIENT_ID` / `XINGZHE_CLIENT_SECRET` | 行者 OpenAPI（在 `~/.hermes/.env`） |
+| `STRAVA_CLIENT_ID` | Strava Application（建议注册自己的） |
+| `~/.hermes/strava_token.json` | Strava OAuth token（含 client_secret，动态读） |
+
+**完整准备步骤见 `CREDENTIALS.md`** —— 每个使用者照着做即可，无需读代码。
+
+**脚本位置规则（重要）**：
+
+| 文件 | 位置 | 原因 |
+|---|---|---|
+| 主脚本（`strava-to-xingzhe-sync.py` / `magene-to-igp.py` / `*_client.py` / `strava-upload.py`） | **本 skill 的 `scripts/`**（单一真相） | 自由，可任意引用 |
+| cron 入口（`run-xingzhe-sync.py` / `run-magene-igp-sync.py`） | **必须是 `~/.hermes/scripts/` 下的真文件** | cron 会 `resolve()` 软链接并要求路径落在 scripts 目录内 —— 软链出去会被守卫拦下，报 `Blocked: script path resolves outside the scripts directory` |
+
+`~/.hermes/scripts/` 下的两个入口是**独立副本**（不是软链接），内容里的 `SCRIPT` / `SKILL_SCRIPTS` 常量直接指向 skill 目录。改入口逻辑时**两处都要改**（skill 目录的归档副本 + `~/.hermes/scripts/` 的运行副本）。
+
+`~/` 下的 `strava-to-xingzhe-sync.py` 等是软链接指向 skill 目录 —— 手动命令行用这些路径没问题（cron 守卫只管 cron 入口）。
+
+辅助脚本（诊断/修复）：`correct_fit_gpx.py`（GPX 中介纠偏）、`correct_gps.py`（两段式漂移）、`rolling_chunk_diagnose.py`（区分真实长路线 vs 漂移）、`detect_gcj02_offset.py`（OSM 双向 GCJ-02 诊断）。
+
+**改完脚本后注意**：Python 会缓存 `__pycache__`，改 `strava-upload.py` 要 `rm -rf ~/__pycache__/strava-upload*` 或用 `python3 -B`。
+
+⚠️ 因为脚本本体在 skill 目录里，`import igp_client` 产生的 `__pycache__` 会**落在 `scripts/__pycache__/`**（Python 按源文件位置缓存）。这是正常的，删掉即可；不要把这个目录当垃圾文件误删源码。
+
+## 坐标系矩阵（最容易踩的坑）
+
+| 源 | 目标平台存什么 | 需要转换？ |
+|---|---|---|
+| 迈金/顽鹿 FIT | IGPSPORT 存 **GCJ-02**（实测差 0.00 m） | ❌ **不转** |
+| 迈金/顽鹿 FIT | 行者 / Strava 存 **WGS-84** | ✅ gcj2wgs |
+| Strava（多数活动） | 行者存 **GCJ-02** | ✅ wgs2gcj（投票判定） |
+| Strava（MAGENE app 上传的） | 已经是 GCJ-02 | ✅ 同上，投票会自动判出来 |
+| 本地迈金 FIT | Strava 存 **WGS-84** | ✅ gcj2wgs（`--correct-coords`） |
+
+**判据（最可靠）**：下载目标平台已存的同一条活动 FIT，与源 FIT 比坐标。
+- 差 **0.00 m** → 原样存储，不转
+- 差 **~450 m**（中国境内典型 GCJ 偏移） → 要转
+
+**不要因为「国内平台都用 GCJ-02」就一刀切。IGPSPORT 是个例外。**
+
+### 投票法（借鉴 ridefitsync，方向修正过）
+
+ridefitsync 原版判定方向**写反了**（实测 10/10 全票判错）。正确：
+
+```
+margin = (off_gcj - off_wgs) / max(...)
+margin > 0 ⇒ WGS-84
+```
+
+单点即可判对；混入境外点/重复停站点均不影响。境外坐标两种转换都是恒等，**必须提前短路**否则除零。
+
+**Strava 的坐标系不固定**（取决于用户用什么 App 上传），所以平台表里 `SOURCE_COORD_SYSTEM["strava"] = None`，必须靠投票。
+
+## 三条链路的接口事实
+
+### 迈金/顽鹿（OneLap 中国版）
+
+**迈金中国版 App 就是「顽鹿运动」**，云端 = `u.onelap.cn`。用户 uid = `<DEVICE_UID>`（= C706 码表序列号）。
+
+| 操作 | 端点 | 关键点 |
+|---|---|---|
+| 登录 | `POST www.onelap.cn/api/login` | body `{account, password: md5hex(密码)}` → `data[0].token` |
+| 列表 | `POST u.onelap.cn/api/otm/ride_record/list` | body `{page, limit}` + 签名头 → `data.list[]`（`id`/`start_riding_time`/`distance_km`/`name`） |
+| 详情 | `GET u.onelap.cn/api/otm/ride_record/analysis/{id}` | → `data.ridingRecord.fitUrl` |
+| FIT 下载 | `GET .../fit_content/{base64(fit_key)}` | **必须 GET，fit_key 要 base64**。POST → 405 |
+
+**签名**：`md5("&".join(f"{k}={v}" for k in sorted(params ∪ {nonce,timestamp})) + "&key=<ONELAP_SIGN_KEY>")`
+nonce = 16 位随机字母数字，timestamp = unix 秒。**body 不参与签名。**
+
+**两种 fitUrl 格式**（都要支持）：
+- `MATCH_<DEVICE_UID>-YYYY-MM-DD-HH-MM-SS-log.st` — 迈金 App 直接传给 IGPSPORT 的记录
+- `geo/YYYYMMDD/Magene_C706_<epoch>_<uid>_<epoch>.fit` — 迈金云端存的原始 FIT
+
+上传时把 `.st` 改回 `.fit` 作为 fileName。
+
+### IGPSPORT
+
+| 操作 | 端点 | 关键点 |
+|---|---|---|
+| 短信登录 | `POST prod.zh.igpsport.com/service/auth/account/login/phone` | body `{appId:"igpsport-web", phone, code}` |
+| 刷新 token | `GET /service/auth/token/refresh?refreshToken=***` | ⚠️ **驼峰参数名**；⚠️ **必须带有效 Bearer**；⚠️ **refresh_token 每次刷新后轮换，必须存新值** |
+| 活动列表 | `GET /service/web-gateway/web-analyze/activity/queryMyActivity` | `data.rows[]`；`startTime` **只有日期**（`2026.10.25`） |
+| 活动详情 | `GET .../queryActivityDetail/{rideId}` | 含完整 `startTime`（`2026-10-14 07:21:08`） |
+| 下载 FIT | `GET .../getDownloadUrl/{rideId}` | → OSS 直链，无需鉴权 |
+
+**上传 = 三步 OSS 流程**（不是单次 POST）：
+```
+1. GET  /service/sportg/third-party-server/oss/getSignedUrl?fileExtension=.fit
+        → {signedUrl, ossId}
+2. PUT  signedUrl                    → 阿里云 OSS（igp-zh.oss-cn-hangzhou.aliyuncs.com）
+3. POST /service/web-gateway/web-analyze/activity/uploadByOss
+        body {fileName, ossName}
+```
+
+**签名**：`base64(HMAC-SHA256(key=<IGP_HMAC_KEY>, sign_str))`
+`sign_str = method\npath(含query)\ntimestamp\nnonce\nsha256hex(body)`
+Header：`x-signature` `x-timestamp` `x-nonce` `x-access-key` `x-platform: web` + `Authorization: Bearer *`
+
+token 有效期 7 天（`expires_in=604800`），refresh_token 是 64 字符随机串（不是 JWT）。
+
+### 行者（XOSS / imxingzhe.com）
+
+| 操作 | OpenAPI | 私有接口（更强） |
+|---|---|---|
+| 活动列表 | `GET /openapi/v1/activities/`（**分钟级延迟**） | `GET /api/v1/pgworkout/?sport=3`（**实时**，需翻页） |
+| 删除活动 | ❌ `DELETE` → 405 | ✅ `DELETE /api/v1/pgworkout/{id}/` → 200，立即生效 |
+| 上传 | `POST /openapi/v1/uploads/` | `POST /api/v1/fit/upload/`（有 9006 判定） |
+
+**私有接口带 OAuth Bearer 即可用**（实测 200，无需 sessionid cookie）。用私有接口做活动索引 —— 避免 OpenAPI 延迟导致已删记录仍被命中。
+
+- 行者 sport：1徒步 2跑步 3骑行。FIT 里 `sport=2(cycling) + sub_sport=1` 是非法组合（treadmill）→ 会被判成跑步 → **`sub_sport` 必须用 0**
+- 上传字段：`title`(≤32) `detail`(≤1500) `fit_filename` `file_type=fit` `md5`(32位小写) + multipart 字段名 `fit_file`
+- 读轨迹：`POST /openapi/v1/workout/{id}/stream/`（**必须 POST**，GET → 405），返回 `data.location` = `[[lng, lat], ...]`
+- **9006 的真相**：OpenAPI 对相同 MD5 **不返回 9006**，而是直接创建新活动。9006 只在私有接口出现 ⇒ **MD5 索引闸门是必需的**
+
+### Strava
+
+| 项 | 结论 |
+|---|---|
+| 原始文件下载 | **做不了**。`GET /api/v3/activities/{id}/download` 对所有活动都 404，因为账号 `premium=False, summit=False`（付费功能，API 一并锁） |
+| 唯一可自动化路径 | `GET /api/v3/activities/{id}/streams?keys=latlng,time,heartrate,watts,cadence,altitude,distance&key_by_type=true` → `garmin_fit_sdk` 重建 FIT |
+| 2026-07 政策 | API 曾对非 Premium 全 403 `Inactive`。**07-02 实测：切换到新 Application（client_id 217315→178483）即可恢复，不必订阅 Premium** |
+| token | `~/.hermes/strava_token.json`，access_token 必须 40 字符。**OAuth code 一次性**，client_id/secret/code 任一改就得重新授权 |
+
+**链路 A 只能靠 streams 重建 FIT**，拿不到原始文件。
+
+## 去重设计（三层闸门）
+
+**服务端索引是真相，本地 state 只是缓存。**
+
+### 链路 A（Strava → 行者）
+1. 服务端活动索引命中 → 跳过。键 = `(start_time ± 15s, distance ± max(30m, 0.5%))`
+   用 `server_has_healthy_activity()`（查健康），**不是** `server_has_activity()`
+2. 服务端 uploads 的 MD5 命中 → 跳过
+3. 都没有 → 才上传
+
+三态语义（防"超时后重传导致重复"）：`uploaded` 跳过 / `unknown`（超时）→ **下一轮先查服务端索引**，查到就补记，查不到才重传，**绝不盲传** / `failed` → 重试。
+
+### 链路 B（迈金 → IGPSPORT）
+1. 本地 state（`.hermes/igp_sync/state.json`，key=`{record_id}:{fitUrl}`）命中 → 跳过
+2. IGPSPORT 活动列表按 `日期 + 距离容差` 命中 → 跳过。容差 `max(50m, 距离×0.5%)`
+   - 用**日期**不用精确时间 —— OneLap 的 `start_riding_time`（FIT 开始）和 IGPSPORT 记录时间差几分钟到十几分钟
+   - IGPSPORT 索引要拉**全量**（`begin_time=None` → 516 条，最早 2023-06），用 begin_time 会漏更早记录 → 补传时产生重复
+3. 都没有 → 上传
+
+**验证标准（必做）**：清空 state 后重跑必须 0 上传。
+
+## 健康检查（防坏记录永久挡住）
+
+`xz_record_healthy(access, workout_id, expect)`：拉 `POST /openapi/v1/workout/{id}/stream/` 取首点。
+- 有 `expect`（Strava 原始首点）→ 偏差 > 2 km 判坏（最准，能抓经纬度互换）
+- 无 `expect` → 启发式：`lat == lon` 或 `90<|lat|<140 且 20<|lon|<50` 判坏
+
+**判坏后自动删除（私有接口）再重传**，日志打 `🧹 已删除损坏记录 workout <id>`。不要依赖用户手动删。
+
+## 凭据自动续期
+
+| 平台 | 过期 | 自动续期 |
+|---|---|---|
+| 顽鹿 | JWT，看 `exp` | `onelap_client.relogin()` —— 密码登录。密码来源：参数 > `ONELAP_PASSWORD` 环境变量 > `.hermes/igp_sync/onelap_password` 文件（0600） |
+| IGPSPORT | 7 天 | `igp_client.refresh_access_token()` —— `refreshToken` 参数，**必须保存轮换后的新 refresh_token** |
+| Strava | 6 小时 | `POST /oauth/token` `grant_type=refresh_token`，**写入后立刻验证长度 == 40** |
+
+**提前刷新 margin = 6 小时**（IGPSPORT 刷新端点要求 Bearer 仍有效，不能等彻底过期）。
+
+刷新失败 → 脚本 `return 1` + 打印重新登录命令 → cron 入口输出 `⚠️` 到 QQ，**不会静默失败几天**。
+
+凭据文件：
+- `~/.hermes/igp_sync/token.json`（IGPSPORT，0600）
+- `~/.hermes/igp_sync/onelap_token.json`（顽鹿，0600）
+- `~/.hermes/igp_sync/onelap_password`（顽鹿密码，0600）
+- `~/.hermes/strava_token.json`（Strava）
+- `~/.hermes/xingzhe_sync/token.json`（行者）
+
+## 定时任务
+
+| job_id | 名称 | 时间 | 脚本 |
+|---|---|---|---|
+| `3670c2356238` | Strava→行者 每日同步 | 每天 07:30 | `run-xingzhe-sync.py` |
+| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 07:30 | `run-magene-igp-sync.py` |
+
+都 `no_agent=true`（脚本模式）。**窗口固定为前天（day-2）00:00~23:59** —— 不要改成"最近 N 天"。
+
+输出规则：有新同步/失败 → 报告给 QQ；无新活动 → 零字节输出（静默）。
+
+## 链路 C：手动上传 FIT 到 Strava
+
+```bash
+python3 ~/strava-upload.py <fit文件路径> [activity_type] [title] [--correct-coords]
+```
+
+- `activity_type`：Run / Ride / Swim / Walk / Hike / Workout / WeightTraining / Yoga（默认 Ride）
+- `--correct-coords`：上传前 GCJ-02 → WGS-84。**迈金 FIT 必加**
+- QQ 附件缓存在 `~/.hermes/cache/documents/doc_<uuid>_qqdownloadftnv5`，**要改名去掉 `doc_<uuid>_` 前缀**（脚本要 `MAGENE_C706_*.fit` 命名）
+
+**上传后必须抓活动详情报告**（距离/时间/爬升/均速/起点终点），不要只说"上传成功"。
+
+**标题**：只用心率区间名（Z1 轻松区 / Z2 脂肪燃烧区 / Z3 有氧耐力区 / Z4 乳酸阈值区 / Z5 最大摄氧区），**不加时间/里程/地点**。阈值 120/140/152/164 bpm（绝对值，不是 max_hr 百分比）。
+
+**双纠偏 bug（07-06）**：纠偏逻辑若不检查文件是否已纠偏过，重复上传会叠加成 825m 偏移。脚本用 `.orig` 备份存在性判断；**更彻底是按坐标特征判断**（已 WGS-84 就跳过）。改纠偏逻辑后**必须验证起点 lon 偏移是 0.0046°（单次）不是 0.0093°（双重）**。
+
+## fitdecode 0.11 API 坑
+
+```python
+import fitdecode
+with fitdecode.FitReader(path) as fr:
+    for fr_ in fr:                       # 迭代器直接吐 frame
+        if fr_.frame_type != fitdecode.FIT_FRAME_DATA: continue   # 必须过滤 header
+        d = {f.name: f.value for f in fr_.fields}
+        lat = d['position_lat'] * 180 / 2**31   # 半圆 → 度
+```
+
+- `get_messages()` / `get_message()` **不存在**
+- 遍历时必须先按 `frame_type` 过滤，否则 `fr_.name` 报 AttributeError
+- `position_lat` 是半圆整数：`* 180 / 2**31`（写反 → 1e16 的荒谬坐标）
+- enum：`f.value` 是 string（`'cycling'`），`f.raw_value` 是 int（`2`）—— Encoder 要 int
+- scaled 数字：`f.value` 是米（`54424.44`），`f.raw_value` 是 cm（`5442444`）
+- **Encoder 重建必须保留 `sport` 消息**（mesg_num=12），漏了 → `parse_fit` 返回 `sport=Other`、标题退化成文件名
+- `fitfile` 库（`from fitfile import File`）也可用，但 `File` 不支持 `with`，属性是 `.record` 不是 `.records`
+
+## 踩过的坑
+
+1. **经纬度写反**：`lat, lon = lat2, lon2` 顺序不能反 —— 写反轨迹塌成直线，lat==lon
+2. **Strava `start_date_local` 带 Z 但内容是本地时间**：`.rstrip("Z")` 再 parse。直接 `fromisoformat(x).astimezone()` 多偏 8 小时 → 去重全部失配 → 全部重复上传
+3. **GCJ 公式分母漏 `a` 因子** → 算出 29047° 经度
+4. **行者 FIT `sub_sport` 用 1(treadmill)** → 被判成跑步
+5. **迈金 FIT 下载用 POST → 405**：必须 GET + base64
+6. **IGPSPORT 上传不是单次 POST**：必须三步 OSS
+7. **IGPSPORT 上传是异步的**：`code:0` 后要等十几秒才进列表（`dataStatus=1` = 解析成功）
+8. **IGPSPORT 列表只有日期没有时间**
+9. **迈金 fitUrl 两种格式**，去重不能只按标题匹配
+10. **Overpass / OSM 沙盒连不上**（Network unreachable）→ 坐标系验证改用「目标平台存的 vs 源 FIT」直接比对
+11. **刷新 refresh_token 会轮换** → 手工测试后必须写回新值
+12. **不能伪造 JWT exp 测过期逻辑** → 改 payload 签名就失效，服务端返回 401/HTML，看着像"刷新坏了"
+13. **Python 缓存陷阱**：改完 `strava-upload.py` 要 `rm -rf ~/__pycache__/strava-upload*`，或用 `python3 -B`
+14. **Strava duplicate 报错其实已上传成功** → 查 `activity_id` 字段确认，别重传
+15. **Strava 海拔膨胀是 DEM 校正**（不是 bug）：145km 骑行 FIT 1140m → Strava 显示 3664m，无法通过重建修复
+16. **cron 脚本不能是软链接**：`cron/scheduler_script.py::_resolve_script_path` 会 `path.resolve()` 后要求 `relative_to(HERMES_HOME/scripts)` —— 软链到 skill 目录会被拦：`Blocked: script path resolves outside the scripts directory`。cron 入口必须是 `~/.hermes/scripts/` 下的**真文件**，内容指向 skill 目录里的主脚本。
+17. **密钥不能硬编码进 skill**（公开仓库泄露风险）：平台签名密钥（顽鹿 `SIGN_KEY`、IGPSPORT `HMAC_KEY`）必须**运行时从环境变量 / 600 权限文件读**，缺失时抛错退出 —— **绝不用默认值兜底**（默认值的语义就是"密钥在代码里"）。个人路径同理，改用 `HERMES_HOME` 环境变量或 `Path.home()` 推导。Strava `client_secret` 一直是从 token 文件动态读的，这个模式要照抄。
+18. **导出脚本自身会污染扫描结果**：如果扫描脚本里写死了真值清单，它会检出自己 → 永远自我报警。正确做法是**从本机配置动态读取真值**，并用 `--exclude` 排除扫描器自身。
+
+## 验证方法
+
+```bash
+# 链路 A 幂等
+python3 ~/strava-to-xingzhe-sync.py --since 2026-10-01 --limit 30
+
+# 链路 A 标准回归（清空 state + FIT 缓存后必须 0 新增）
+rm -f ~/.hermes/xingzhe_sync/fit/*.fit
+python3 -c "import json,os; p=os.path.expanduser('~/.hermes/xingzhe_sync/strava_state.json'); s=json.load(open(p)); s['synced']={}; json.dump(s,open(p,'w'),indent=2)"
+python3 ~/strava-to-xingzhe-sync.py --since 2026-10-01 --until 2026-10-20 --limit 30
+
+# 链路 B 幂等 + 清空 state
+python3 ~/magene-to-igp.py --since 2026-09-25 --until 2026-10-25 --limit 50
+rm -f ~/.hermes/igp_sync/state.json
+python3 ~/magene-to-igp.py --since 2026-09-25 --until 2026-10-25 --limit 50
+```
+
+**上传后回读校验**：
+- 链路 A：`GET /openapi/v1/activities/{workout_id}/` 检查 `sport=3`、距离误差 < 2%
+- 链路 B：`queryActivityDetail/{rideId}` 检查 `rideDistance` 与源一致、`dataStatus=1`
+- 链路 C：`GET /api/v3/activities/{id}` 检查距离/爬升/起点终点
+
+## 详细文档
+
+- `references/strava-xingzhe-sync-detail.md` — 链路 A 完整细节（投票法实现、9006 真相、健康检查、坏记录自动清理）
+- `references/magene-igp-sync-detail.md` — 链路 B 完整细节（OneLap 签名、三步 OSS、token 续期）
+- `references/strava-upload-detail.md` — 链路 C 完整细节（Strava API 政策、OAuth 流程、标题算法、水平偏移五分类、诊断脚本）
+- `references/strava-streams-to-fit.md` — Strava Streams → FIT 重建（跨平台同步到国产平台的核心）
+- `references/magene-c706-gcj02-offset.md` — GCJ-02 系统偏移识别（OSM 双向验证）
+- `references/fit-method-comparison.md` — 三种 FIT 修复方法决策树
+- `references/fitdecode-encoder-pitfalls.md` — fitdecode + Encoder 三个实操坑
+- `references/hr-zone-absolute-threshold.md` — 心率区间绝对阈值法
+- `references/oauth-application-swap-2026-07-02.md` — Strava Application 切换恢复 API 完整流程
+- `references/strava-api-paywall-2026-07.md` — 2026-07 Strava 政策变更
+- 其余 reference 见目录

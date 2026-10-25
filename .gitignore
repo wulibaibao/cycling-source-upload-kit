@@ -1,0 +1,34 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 凭据与密钥（**绝不入库**）
+*.token
+token.json
+*_token.json
+onelap_password
+onelap_sign_key
+hmac_key
+*.secret
+secrets/
+.env
+.env.*
+!.env.example
+
+# 状态与缓存
+state.json
+*.fit
+*.gpx
+fit/
+logs/
+
+# 备份
+*.orig
+*.bak
+*~
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,4 @@
+# 核心依赖
+requests>=2.31
+garmin-fit-sdk>=0.23
+fitdecode>=0.11
