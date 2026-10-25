@@ -28,6 +28,7 @@ version: 1.0.0
 | `magene-to-igp.py` | 链路 B 主脚本 |
 | `run-magene-igp-sync.py` | 链路 B cron 入口 |
 | `_serial_lock.py` | 全局串行锁（所有 cron 入口共用，见下方「全局串行锁」） |
+| `export-skill.sh` | 安全导出到 GitHub（打包前扫真值 + 校验副本一致） |
 | `strava-upload.py` | 链路 C 主脚本（手动上传单个 FIT） |
 
 ## 凭据（**不含任何密钥**）
@@ -67,6 +68,22 @@ version: 1.0.0
 - `acquire()` 用 `fcntl.flock(fd, LOCK_EX | LOCK_NB)` —— **抢不到立即放弃本轮（返回 0，静默）**，不排队、不堆叠
 - 锁只加在 **cron 入口层**（`~/.hermes/scripts/run-*-sync.py`）；脚本本体不含锁，避免手动调用时误伤
 - 诊断当前持锁者：`cat ~/.hermes/run/serial.lock`
+
+### 三副本一致性（防漂移）
+
+同一份代码存在三处拷贝：
+1. `~/.hermes/scripts/*.py` ← **生产**（cron 实际执行，非 git 仓库）
+2. `~/.hermes/skills/cycling-data-upload/scripts/*.py` ← skill 副本（导出源）
+3. GitHub 仓库 ← 公开副本
+
+改了一处忘同步 = 漂移，公开仓库里的示例代码与实际跑的不符，会误导使用者。
+
+```bash
+python3 ~/.hermes/scripts/verify-no-drift.py          # 检查
+python3 ~/.hermes/scripts/verify-no-drift.py --fix    # 自动修复（以生产版为准）
+```
+
+`export-skill.sh` 在打包前会自动跑这个校验，**有漂移即中止导出**。
 
 辅助脚本（诊断/修复）：`correct_fit_gpx.py`（GPX 中介纠偏）、`correct_gps.py`（两段式漂移）、`rolling_chunk_diagnose.py`（区分真实长路线 vs 漂移）、`detect_gcj02_offset.py`（OSM 双向 GCJ-02 诊断）。
 
