@@ -1,6 +1,6 @@
 ---
 name: cycling-data-upload
-description: Use when uploading cycling FIT data to Strava, 行者/XOSS (imxingzhe.com), or IGPSPORT; when syncing 迈金/Magene, 顽鹿/OneLap, or Strava activities to a Chinese platform; when debugging duplicate activities, coordinate offsets (GCJ-02/WGS-84), FIT token refresh, or the daily 07:30 sync jobs. Covers Strava→行者, 迈金→IGPSPORT, and manual FIT→Strava upload.
+description: Use when uploading cycling FIT data to Strava, 行者/XOSS (imxingzhe.com), or IGPSPORT; when syncing 迈金/Magene, 顽鹿/OneLap, or Strava activities to a Chinese platform; when debugging duplicate activities, coordinate offsets (GCJ-02/WGS-84), FIT token refresh, or the daily 11:00-11:20 sync jobs. Covers Strava→行者, 迈金→IGPSPORT, and manual FIT→Strava upload.
 license: MIT
 version: 1.0.0
 ---
@@ -11,8 +11,8 @@ version: 1.0.0
 
 | 链路 | 方向 | 源 → 目标 | 坐标系 | 定时 job |
 |---|---|---|---|---|
-| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | `3670c2356238` 每天 07:30 |
-| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | `3e3e0194d61b` 每天 07:30 |
+| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | `3670c2356238` 每天 11:10 |
+| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | `3e3e0194d61b` 每天 11:05 |
 | **C** | 本地 FIT → Strava | 用户发的 FIT → Strava API | **需转** GCJ-02→WGS-84 | 手动 |
 
 **坐标系是三条链路最大的差异 —— 详见下方「坐标系矩阵」，搞错就是 400-500m 偏移。**
@@ -27,6 +27,7 @@ version: 1.0.0
 | `igp_client.py` | IGPSPORT API 客户端（短信登录/刷新/三步 OSS 上传/签名） |
 | `magene-to-igp.py` | 链路 B 主脚本 |
 | `run-magene-igp-sync.py` | 链路 B cron 入口 |
+| `_serial_lock.py` | 全局串行锁（所有 cron 入口共用，见下方「全局串行锁」） |
 | `strava-upload.py` | 链路 C 主脚本（手动上传单个 FIT） |
 
 ## 凭据（**不含任何密钥**）
@@ -54,6 +55,18 @@ version: 1.0.0
 `~/.hermes/scripts/` 下的两个入口是**独立副本**（不是软链接），内容里的 `SCRIPT` / `SKILL_SCRIPTS` 常量直接指向 skill 目录。改入口逻辑时**两处都要改**（skill 目录的归档副本 + `~/.hermes/scripts/` 的运行副本）。
 
 `~/` 下的 `strava-to-xingzhe-sync.py` 等是软链接指向 skill 目录 —— 手动命令行用这些路径没问题（cron 守卫只管 cron 入口）。
+
+### 全局串行锁（2026-10-25）
+
+两个同步 cron 与博客的三个任务（Trending 刷新 11:00、AI 文章抓取 11:20）**共用同一把全局锁**：
+
+```
+~/.hermes/scripts/_serial_lock.py  →  ~/.hermes/run/serial.lock
+```
+
+- `acquire()` 用 `fcntl.flock(fd, LOCK_EX | LOCK_NB)` —— **抢不到立即放弃本轮（返回 0，静默）**，不排队、不堆叠
+- 锁只加在 **cron 入口层**（`~/.hermes/scripts/run-*-sync.py`）；脚本本体不含锁，避免手动调用时误伤
+- 诊断当前持锁者：`cat ~/.hermes/run/serial.lock`
 
 辅助脚本（诊断/修复）：`correct_fit_gpx.py`（GPX 中介纠偏）、`correct_gps.py`（两段式漂移）、`rolling_chunk_diagnose.py`（区分真实长路线 vs 漂移）、`detect_gcj02_offset.py`（OSM 双向 GCJ-02 诊断）。
 
@@ -215,8 +228,8 @@ token 有效期 7 天（`expires_in=604800`），refresh_token 是 64 字符随�
 
 | job_id | 名称 | 时间 | 脚本 |
 |---|---|---|---|
-| `3670c2356238` | Strava→行者 每日同步 | 每天 07:30 | `run-xingzhe-sync.py` |
-| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 07:30 | `run-magene-igp-sync.py` |
+| `3670c2356238` | Strava→行者 每日同步 | 每天 **11:10** | `run-xingzhe-sync.py` |
+| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 **11:05** | `run-magene-igp-sync.py` |
 
 都 `no_agent=true`（脚本模式）。**窗口固定为前天（day-2）00:00~23:59** —— 不要改成"最近 N 天"。
 
