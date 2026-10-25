@@ -11,6 +11,7 @@
 #   ./export-skill.sh --push <repo-url>    # 打包并推到 GitHub（需 gh 已登录）
 set -euo pipefail
 
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 SKILL_NAME="cycling-data-upload"
 SRC="$HOME/.hermes/skills/$SKILL_NAME"
 OUT="${OUT_DIR:-/tmp/skill-export}"
@@ -29,6 +30,21 @@ find "$STAGE" -name '*.pyc' -delete 2>/dev/null || true
 rm -f "$STAGE"/.env "$STAGE"/*.token "$STAGE"/onelap_password \
       "$STAGE"/onelap_sign_key "$STAGE"/hmac_key 2>/dev/null || true
 rm -rf "$STAGE"/fit "$STAGE"/logs 2>/dev/null || true
+
+echo "==> 副本一致性校验"
+# 生产脚本（~/.hermes/scripts/）与 skill 副本必须一致 ——
+# 不一致就推送 = 公开仓库里的示例代码与实际跑的不符，会误导使用者。
+VERIFY="${HERMES_HOME:-$HOME/.hermes}/scripts/verify-no-drift.py"
+if [ -f "$VERIFY" ]; then
+  if python3 "$VERIFY"; then
+    echo "    ✅ 生产/副本一致"
+  else
+    echo "    ❌ 生产脚本与 skill 副本漂移 —— 先跑：python3 $VERIFY --fix"
+    exit 1
+  fi
+else
+  echo "    ⚠️  未找到 verify-no-drift.py，跳过"
+fi
 
 echo "==> 密钥扫描"
 # 真值清单**从本机配置动态读取**（脚本自身不含任何真值，可安全公开）。
