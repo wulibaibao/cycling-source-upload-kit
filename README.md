@@ -2,7 +2,7 @@
 
 多平台骑行 FIT 同步工具集 —— 把 **迈金/顽鹿(OneLap)**、**IGPSPORT**、**Strava**、**行者(XOSS)** 四个平台的骑行数据对齐的完整实现。
 
-目前 **5 条同步链路**：
+目前 **4 条同步链路**：
 
 | 链路 | 方向 | 服务端去重 | 坐标系 |
 |---|---|---|---|
@@ -10,7 +10,6 @@
 | B | 迈金 → IGPSPORT | ✅ IGPS 有 | GCJ-02（不转） |
 | C | 本地 FIT → Strava | ✅ Strava 有 | WGS-84 |
 | **D** | **Strava → 迈金** | ❌ **迈金无** | WGS-84 → GCJ-02 |
-| **E** | **Strava → IGPSPORT** | ✅ IGPS 有 | WGS-84 → GCJ-02 |
 
 为 [Hermes Agent](https://hermes-agent.nousresearch.com/docs) 编写，也可作为独立脚本使用。
 
@@ -102,8 +101,6 @@ cycling-source-upload-kit/
 │   ├── strava-upload.py            # 链路 C 主脚本
 │   ├── strava-to-onelap.py         # 链路 D 主脚本（Strava → 迈金）
 │   ├── run-onelap-sync.py          # 链路 D cron 入口
-│   ├── strava-to-igp.py            # 链路 E 主脚本（Strava → IGPSPORT）
-│   ├── run-strava-igp-sync.py      # 链路 E cron 入口
 │   ├── export-skill.sh             # 导出/发布（含密钥扫描）
 │   └── correct_*.py                # 坐标纠偏诊断工具
 └── references/                 # 24 篇详细文档
@@ -120,7 +117,6 @@ cron 在**上午 11 点**依次跑，窗口统一是 **day-2 ~ day-0**（前天+
 | 11:10 | `run-xingzhe-sync.py` | Strava → 行者 | 有新同步才输出 |
 | 11:15 | `run-onelap-sync.py` | Strava → 迈金 | 有新同步才输出 |
 | 11:20 | `run-ai-article-scrape.py` | AI 文章抓取（非骑行） | 有新文章才输出 |
-| 11:25 | `run-strava-igp-sync.py` | Strava → IGPSPORT | 有新同步才输出 |
 
 > **为什么是 day-2~day-0 而不是 day-2 单日？**
 > - `day-1` 会漏掉「今天早上」骑的（一天两练时必然漏一条）
