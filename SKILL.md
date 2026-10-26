@@ -57,7 +57,46 @@ version: 1.0.0
 
 `~/` 下的 `strava-to-xingzhe-sync.py` 等是软链接指向 skill 目录 —— 手动命令行用这些路径没问题（cron 守卫只管 cron 入口）。
 
-### ⚠ 「同步没生效」排查（2026-10-26 用户反馈后新增）
+### ⚠⚠ 迈金云端 host 用错 → 日常骑行全部漏掉（2026-10-26，最隐蔽的一个）
+
+**症状**：用户在迈金 App 里能看到骑行，IGPSPORT/行者里没有。日志显示
+`顽鹿活动累计 40 条` / `窗口内候选 0 条` —— 云端"确实"没有这条记录。
+
+**根因**：`onelap_client.APP` 原来指向 `https://u.onelap.cn`。
+但 **两个 host 返回不同的数据集**：
+
+| host | `/api/otm/ride_record/list` 的 `pagination.total` |
+|---|---|
+| `https://u.onelap.cn` | **450** |
+| `https://www.onelap.cn` | **452** ← 正确的 |
+| `https://otm.onelap.cn` | 450 |
+
+差的 2 条恰恰是 **`type=48` 自由骑行 / `type=15` 快速燃脂** —— 也就是
+**最普通的日常骑行**，恰恰是用户最在意的类型。
+（`type=13` 竞技/比赛类、`type=49` 路线类反而都在 u.onelap.cn 里。）
+
+**实测漏掉的**：
+```
+2026-10-25 20:54:09  自由骑行   17.85km  0:42:40  375m   ← 漏
+2026-10-26 06:55:55  快速燃脂4  17.57km  0:45:34  186m   ← 漏
+```
+修复后两条都补传成功（rideId 58709824 / 58709823）。
+
+**排查铁律：App 里有、云端拉不到 → 先换 host 试，别急着下结论说"没上传"。**
+```python
+for h in ["https://www.onelap.cn","https://u.onelap.cn","https://otm.onelap.cn"]:
+    payload={"page":1,"limit":5}
+    r=sess.post(h+"/api/otm/ride_record/list", json=payload, headers=ol.sign_headers(payload), timeout=20)
+    print(h, r.json()["data"]["pagination"]["total"])   # 比对 total
+```
+三个 host 都返回 200（不是 404），**只有 total 不同** —— 这是最容易漏掉的坑，
+因为「请求成功」给人的印象是「数据没问题」。
+
+**连带修正**：FIT 下载的 `fit_key` 必须 **base64 编码**后再拼 URL
+（`base64.b64encode(key.encode()).decode()`），不编码会返回
+`HTTP 500 {"error":"文件处理失败"}` —— 同样是「请求成功但拿不到数据」的假象。
+
+## ⚠ 「同步没生效」排查（2026-10-26 用户反馈后新增）
 
 **症状**：cron 显示 `last_status=ok`，但行者/IGPSPORT 里没有新活动。
 
