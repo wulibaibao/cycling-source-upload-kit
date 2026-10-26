@@ -59,7 +59,7 @@ version: 1.0.0
 
 ### 📐 四平台一致性架构（2026-10-26 新增）
 
-现在有 **5 条同步链路**，共同把四个平台（迈金/OneLap、IGPSPORT、Strava、行者）对齐：
+现在有 **4 条同步链路**，共同把四个平台（迈金/OneLap、IGPSPORT、Strava、行者）对齐：
 
 ```
                     ┌──────────────┐
@@ -73,8 +73,7 @@ version: 1.0.0
                     └──────┬───────┘
                            │
    ② Strava → 迈金 ────────┤
-   ③ Strava → IGPSPORT ────┤
-   ④ Strava → 行者 ────────┤
+   ③ Strava → 行者 ────────┤
                            ▼
                     ┌──────────────┐
                     │  行者        │  服务端有去重（私有接口可删）
@@ -87,8 +86,14 @@ version: 1.0.0
 |---|---|---|---|
 | `magene-to-igp.py` | 迈金 → IGPSPORT | ✅ IGPS 有 | 原始链路 |
 | `strava-to-onelap.py` | Strava → 迈金 | ❌ **无** | 客户端闸门是硬要求 |
-| `strava-to-igp.py` | Strava → IGPSPORT | ✅ IGPS 有 | |
 | `strava-to-xingzhe-sync.py` | Strava → 行者 | ✅ 行者有 | |
+
+> **为什么没有「Strava → IGPSPORT」？**
+> 实测 IGPSPORT 的 `uploadByOss` 接口虽然返回 `code:0 success`，
+> 但 FIT 长时间不会进 `queryMyActivity` 列表（等了 2 分钟仍 516 条不变）。
+> 推测是 IGPSPORT 侧的分析队列只放行**自己 App 产生**的 FIT。
+> 所以 IGPSPORT 只做**单向接收**（迈金 → IGPSPORT），不做反向补齐。
+> （2026-10-26 实测：Strava → IGPSPORT 传 2 条，服务端一条没入库。）
 
 **cron 入口**（`~/.hermes/scripts/` 下必须是真文件）：
 | 时间 | 任务 | job_id |
@@ -98,7 +103,6 @@ version: 1.0.0
 | 11:10 | Strava → 行者 | `3670c2356238` |
 | 11:15 | **Strava → 迈金** | `49f30ba58248` |
 | 11:20 | AI 文章抓取 | `701069159aac` |
-| 11:25 | **Strava → IGPSPORT** | `6d0ed8687cf1` |
 
 ### ⚠ 迈金上传接口要点（实测 2026-10-26）
 
