@@ -15,7 +15,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(HERE))
-from _serial_lock import acquire as _acquire, release as _release
+from _serial_lock import acquire as _acquire, release as _release, holder as _holder
 
 # 主脚本本体在 skill 目录（单一真相）。cron 入口本身必须是
 # ~/.hermes/scripts/ 下的真文件 —— cron 会 resolve() 软链接并要求路径
@@ -35,9 +35,11 @@ def main() -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     LOG = LOG_DIR / f"magene-igp-{datetime.now():%Y%m%d}.log"
 
-    # 全局串行锁：抢不到 → 别的任务在跑，本轮静默放弃。
-    lock_fd = _acquire("magene-igp-sync")
+    # 全局串行锁：抢不到 → 等最多 3 分钟；仍抢不到则明确报告（见 strava 入口注释）。
+    lock_fd = _acquire("magene-igp-sync", wait_s=180)
     if lock_fd is None:
+        print(f"⚠️ 迈金→IGPSPORT 本轮未执行：全局锁被占用（持锁: {_holder()}）")
+        print(f"   下一个 cron 窗口会自动重试。")
         return 0
 
     try:
