@@ -29,8 +29,11 @@ def main() -> int:
     # 原先只有 day-2 单日，昨天(10-25)骑的要等到后天才同步。
     _now = datetime.now().date()
     D2 = (_now - timedelta(days=2)).isoformat()
-    D1 = (_now - timedelta(days=1)).isoformat()
-    TARGET = f"{D2} ~ {D1}"
+    # 2026-10-26 第二次修复：until 从 day-1 改成 day-0（含今天）。
+    # day-1 会漏掉「今天早上」骑的活动 —— 例如 2026-10-26 06:55 的「快速燃脂4」
+    # （17.57km），本地日期是 10-26，落在 day-1 窗口之外。
+    D0 = (_now - timedelta(days=0)).isoformat()
+    TARGET = f"{D2} ~ {D0}"
     LOG_DIR = HERMES_HOME / "xingzhe_sync" / "logs"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     LOG = LOG_DIR / f"magene-igp-{datetime.now():%Y%m%d}.log"
@@ -44,7 +47,7 @@ def main() -> int:
 
     try:
         cmd = [sys.executable, str(SKILL_SCRIPTS / "magene-to-igp.py"),
-               "--since", D2, "--until", D1, "--limit", "30"]
+               "--since", D2, "--until", D0, "--limit", "30"]
 
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SKILL_SCRIPTS) + ":" + env.get("PYTHONPATH", "")
