@@ -33,7 +33,6 @@ FILES = [
     "run-xingzhe-sync.py",
     "run-magene-igp-sync.py",
     "run-onelap-sync.py",
-    "run-strava-igp-sync.py",
     "run-ai-article-scrape.py",
 ]
 
