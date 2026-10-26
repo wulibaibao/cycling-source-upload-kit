@@ -22,7 +22,7 @@ version: 1.0.0
 | 脚本 | 用途 |
 |---|---|
 | `strava-to-xingzhe-sync.py` | 链路 A 主脚本 |
-| `run-xingzhe-sync.py` | 链路 A cron 入口（前天单日窗口，无新活动零输出） |
+| `run-xingzhe-sync.py` | 链路 A cron 入口（day-2~day-1 窗口，无新活动零输出） |
 | `onelap_client.py` | 迈金/顽鹿 API 客户端（登录/列表/详情/FIT 下载/签名） |
 | `igp_client.py` | IGPSPORT API 客户端（短信登录/刷新/三步 OSS 上传/签名） |
 | `magene-to-igp.py` | 链路 B 主脚本 |
@@ -57,7 +57,39 @@ version: 1.0.0
 
 `~/` 下的 `strava-to-xingzhe-sync.py` 等是软链接指向 skill 目录 —— 手动命令行用这些路径没问题（cron 守卫只管 cron 入口）。
 
-### 全局串行锁（2026-10-25）
+### ⚠ 「同步没生效」排查（2026-10-26 用户反馈后新增）
+
+**症状**：cron 显示 `last_status=ok`，但行者/IGPSPORT 里没有新活动。
+
+**`ok` 只代表脚本退出码 0** —— 骑行同步没数据时本来就静默返回 0。
+所以「ok」和「没生效」并不矛盾，不要只看 cron 状态就下结论。
+
+**排查顺序**（照着查，不要跳步）：
+
+1. **看日志**（`~/.hermes/xingzhe_sync/logs/sync-YYYYMMDD.log`）里这行：
+   `Strava 候选 N 条` —— N=0 说明根本没抓到活动；N>0 但「跳过」说明被去重挡了。
+2. **N=0 → 查两处**：
+   - **窗口**：cron 11:05 跑，day-2~day-1 覆盖前天+昨天。如果窗口写死成单日 day-2，昨天骑的永远扫不到。
+   - **`--types` 白名单**：默认 `Ride,VirtualRide`。**VirtualRide 是虚拟/室内骑行，
+     曾经被漏掉**（原默认只有 `Ride`，`SPORT_MAP` 里虽有 `VirtualRide→3` 映射但白名单把它挡在门外）→
+     用户 2026-10-25 的 20.0km VirtualRide (#20720920299) 一直没同步到行者。
+     **排查时先确认活动的 `type` 字段**（Strava API: `type` / `sport_type`）。
+3. **N>0 但全跳过** → 看「跳过」原因：行者已有相同活动（workout_id 命中）= 正常，幂等生效。
+
+**实测数据（2026-10-26）**：
+```
+Strava #20720920299  type=VirtualRide  20.0km  3322 GPS点 + HR + Cadence
+  → 原被 --types=Ride 静默过滤，cron 一个字都没说
+  → 修复后：上传成功 workout=225878773，point_counts=3322，is_valid=1
+             avg_hr=114 max_hr=148 avg_cad=61 avg_power=132 NP=159 FTP=260
+```
+
+**注意**：虚拟骑行上传后 `avg_speed` / `max_speed` / `calories` / `cities` 都是 0 或空 ——
+没有真实 GPS 速度，属正常，**不是上传失败**。判断成功看 `point_counts` + `is_valid=1` + `distance`。
+
+**入口脚本新增自检**：静默前会区分「0 候选」和「候选全被跳过」，后者会打印说明而非完全静默。
+
+## 全局串行锁（2026-10-25）
 
 两个同步 cron 与博客的三个任务（Trending 刷新 11:00、AI 文章抓取 11:20）**共用同一把全局锁**：
 
@@ -248,7 +280,12 @@ token 有效期 7 天（`expires_in=604800`），refresh_token 是 64 字符随�
 | `3670c2356238` | Strava→行者 每日同步 | 每天 **11:10** | `run-xingzhe-sync.py` |
 | `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 **11:05** | `run-magene-igp-sync.py` |
 
-都 `no_agent=true`（脚本模式）。**窗口固定为前天（day-2）00:00~23:59** —— 不要改成"最近 N 天"。
+都 `no_agent=true`（脚本模式）。
+
+**窗口 = day-2 ~ day-1（前天 + 昨天）00:00~23:59**，不要改成"最近 N 天"（会拉大量历史，撞库闸门成本高）。
+- 2026-10-26 修正：原为 **day-2 单日**。cron 在 11:05 跑，只扫前天 → 昨天骑的活动当天扫不到，
+  要等后天 11:05 才同步（用户反馈「同步没生效」）。改成 day-2~day-1 后，昨天骑的最迟次日 11:10 入库。
+- 服务端去重闸门（行者 workout_id / IGPSPORT md5）保证 day-2 已同步的不会重复上传。
 
 输出规则：有新同步/失败 → 报告给 QQ；无新活动 → 零字节输出（静默）。
 
