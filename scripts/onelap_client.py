@@ -5,9 +5,9 @@
 
 接口契约来自 moruoxian/SyncOnelapToXoss（逆向后整理）：
   - 登录:  POST https://www.onelap.cn/api/login  {account, password: md5hex(pw)}
-  - 列表:  POST https://u.onelap.cn/api/otm/ride_record/list  {page, limit} + 签名头
-  - 详情:  GET  https://u.onelap.cn/api/otm/ride_record/analysis/{record_id}
-  - FIT:   POST https://u.onelap.cn/api/otm/ride_record/analysis/fit_content/{fit_key}
+  - 列表:  POST https://www.onelap.cn/api/otm/ride_record/list  {page, limit} + 签名头
+  - 详情:  GET  https://www.onelap.cn/api/otm/ride_record/analysis/{record_id}
+  - FIT:   GET  https://www.onelap.cn/api/otm/ride_record/analysis/fit_content/{base64(fit_key)}
 
 签名: md5("&".join(f"{k}={v}" for k in sorted(params+nonce+timestamp)) + "&key=SIGN_KEY")
 """
@@ -23,7 +23,20 @@ from urllib.parse import unquote, urlparse
 import requests
 
 WEB = "https://www.onelap.cn"
-APP = "https://u.onelap.cn"
+# 2026-10-26 修正：数据 API 的 host 从 u.onelap.cn 改成 www.onelap.cn。
+#
+# 为什么要改：两个 host 返回**不同的数据集**。
+#   u.onelap.cn  /api/otm/ride_record/list  → total=450
+#   www.onelap.cn /api/otm/ride_record/list  → total=452
+# 差的那 2 条是「自由骑行」类活动（type=48 自由骑行 / type=15 快速燃脂），
+# 也就是**最普通的那种日常骑行** —— 反而是用户最在意的类型。
+# 2026-10-25 20:54 的「自由骑行」17.85km 就是这样漏掉的。
+#
+# 排查方法（下次再遇到「App 里有但云端拉不到」）：把 host 换着试，比对 total。
+#   for h in ["https://www.onelap.cn","https://u.onelap.cn","https://otm.onelap.cn"]:
+#       POST {h}/api/otm/ride_record/list {page:1,limit:5} → 看 pagination.total
+# 三个 host 都有效（不是 404），但数据集不同 —— 这是最容易漏掉的坑。
+APP = "https://www.onelap.cn"
 LOGIN_API = f"{WEB}/api/login"
 LIST_API = f"{APP}/api/otm/ride_record/list"
 DETAIL_API = f"{APP}/api/otm/ride_record/analysis/{{record_id}}"
