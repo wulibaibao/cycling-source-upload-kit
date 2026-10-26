@@ -79,6 +79,33 @@ version: 1.0.0
 
 **历史老活动不要批量补** —— 2024-2025 的活动本来是逐年手工同步的，批量灌进去反而污染数据。只补「近 30 天」这种真实缺口。
 
+## ⚠️ 盘点时的两个自伤坑（2026-10-26 踩过）
+
+### 1. 行者分页参数用错会造出「几百条缺口」假象
+
+用 `page`/`page_size` 调私有接口 `/api/v1/pgworkout/` 只会返回 **20 条**（还是最新的），
+看起来像「行者缺 300 条」。正确参数是 **`offset`/`limit`/`sport=3`**（见 `strava-to-xingzhe-sync.py`
+的 `fetch_xz_activities()`）。真实全量是 294 条。
+
+**教训**：盘点出现「大批量缺口」时，先怀疑自己的分页/时间窗参数，再怀疑平台。
+
+### 2. 用文件内容 sha1 比对 GitHub 会全部误判为「已更新」
+
+GitHub Contents API 的 `sha` 是 **blob sha** = `sha1("blob <字节数>\0" + 文件内容)`，
+不是纯文件内容的 sha1。直接比会得到「47 个文件全变了」。
+
+**正确写法**：
+```python
+hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+```
+
+更新已存在文件时还必须带上远端当前 `sha`，否则报 `"sha" wasn't supplied` (422)。
+
+## GitHub 仓库
+
+`wulibaibao/cycling-source-upload-kit`（公开，MIT）。发布流程见 `references/skill-export-recipe.md`。
+注意：仓库根目录是 **skill 内容本身**（`SKILL.md`/`scripts/`/`references/`），没有 `cycling-data-upload/` 前缀层。
+
 ## 📐 四平台一致性架构（2026-10-26 新增）
 
 现在有 **4 条同步链路**，共同把四个平台（迈金/OneLap、IGPSPORT、Strava、行者）对齐：
