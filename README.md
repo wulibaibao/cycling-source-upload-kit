@@ -1,6 +1,16 @@
 # cycling-source-upload-kit
 
-多平台骑行 FIT 同步工具集 —— **Strava → 行者(XOSS)**、**迈金/顽鹿 → IGPSPORT**、**本地 FIT → Strava** 三条链路的完整实现。
+多平台骑行 FIT 同步工具集 —— 把 **迈金/顽鹿(OneLap)**、**IGPSPORT**、**Strava**、**行者(XOSS)** 四个平台的骑行数据对齐的完整实现。
+
+目前 **5 条同步链路**：
+
+| 链路 | 方向 | 服务端去重 | 坐标系 |
+|---|---|---|---|
+| A | Strava → 行者 | ✅ 行者有 | WGS-84 → GCJ-02 |
+| B | 迈金 → IGPSPORT | ✅ IGPS 有 | GCJ-02（不转） |
+| C | 本地 FIT → Strava | ✅ Strava 有 | WGS-84 |
+| **D** | **Strava → 迈金** | ❌ **迈金无** | WGS-84 → GCJ-02 |
+| **E** | **Strava → IGPSPORT** | ✅ IGPS 有 | WGS-84 → GCJ-02 |
 
 为 [Hermes Agent](https://hermes-agent.nousresearch.com/docs) 编写，也可作为独立脚本使用。
 
@@ -90,6 +100,10 @@ cycling-source-upload-kit/
 │   ├── magene-to-igp.py            # 链路 B 主脚本
 │   ├── run-magene-igp-sync.py      # 链路 B cron 入口
 │   ├── strava-upload.py            # 链路 C 主脚本
+│   ├── strava-to-onelap.py         # 链路 D 主脚本（Strava → 迈金）
+│   ├── run-onelap-sync.py          # 链路 D cron 入口
+│   ├── strava-to-igp.py            # 链路 E 主脚本（Strava → IGPSPORT）
+│   ├── run-strava-igp-sync.py      # 链路 E cron 入口
 │   ├── export-skill.sh             # 导出/发布（含密钥扫描）
 │   └── correct_*.py                # 坐标纠偏诊断工具
 └── references/                 # 24 篇详细文档
@@ -97,12 +111,22 @@ cycling-source-upload-kit/
 
 ## 定时任务
 
-两个 cron 在**上午 11 点**依次跑（11:05 / 11:10），同步**前天**的数据：
+cron 在**上午 11 点**依次跑，窗口统一是 **day-2 ~ day-0**（前天+昨天+今天）：
 
-| 脚本 | 窗口 | 输出 |
-|---|---|---|
-| `run-xingzhe-sync.py` | day-2 00:00~23:59 | 有新同步才输出 |
-| `run-magene-igp-sync.py` | day-2 00:00~23:59 | 有新同步才输出 |
+| 时间 | 脚本 | 方向 | 输出 |
+|---|---|---|---|
+| 11:00 | `run-github-trending-refresh.py` | 博客 Trending（非骑行） | 有变化才输出 |
+| 11:05 | `run-magene-igp-sync.py` | 迈金 → IGPSPORT | 有新同步才输出 |
+| 11:10 | `run-xingzhe-sync.py` | Strava → 行者 | 有新同步才输出 |
+| 11:15 | `run-onelap-sync.py` | Strava → 迈金 | 有新同步才输出 |
+| 11:20 | `run-ai-article-scrape.py` | AI 文章抓取（非骑行） | 有新文章才输出 |
+| 11:25 | `run-strava-igp-sync.py` | Strava → IGPSPORT | 有新同步才输出 |
+
+> **为什么是 day-2~day-0 而不是 day-2 单日？**
+> - `day-1` 会漏掉「今天早上」骑的（一天两练时必然漏一条）
+> - `day-0` 覆盖今天
+> - `day-2` 起步是容忍源平台数据延迟入库（迈金→Strava 这条链路实测有延迟，
+>   当天骑的常常中午才同步到 Strava）
 
 > **cron 入口必须是 `~/.hermes/scripts/` 下的真文件** —— Hermes 的 cron 守卫会 `resolve()` 软链接并要求路径落在 scripts 目录内，软链出去会被拦。
 
@@ -116,8 +140,9 @@ cycling-source-upload-kit/
 
 ### 全局串行锁
 
-所有 cron 任务共用 `~/.hermes/run/serial.lock`（`flock LOCK_EX | LOCK_NB`）：
-**抢不到锁就放弃本轮**，不排队、不堆叠 —— 保证多个任务「一个个进行」。
+所有 cron 任务共用 `~/.hermes/run/serial.lock`（`flock` 独占锁）：
+**抢不到锁就等一小段时间**（各任务 wait_s 不同，120~240 秒），等不到才放弃本轮。
+抢不到时**会明确报告**「本轮未执行：全局锁被占用」—— 不会静默消失。
 
 ```bash
 cat ~/.hermes/run/serial.lock   # 查看当前持锁者
