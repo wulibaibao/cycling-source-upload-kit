@@ -57,7 +57,68 @@ version: 1.0.0
 
 `~/` 下的 `strava-to-xingzhe-sync.py` 等是软链接指向 skill 目录 —— 手动命令行用这些路径没问题（cron 守卫只管 cron 入口）。
 
-### ⚠⚠⚠ 同步窗口必须是 day-2 ~ day-0（含今天），且要留数据到达缓冲（2026-10-26）
+### 📐 四平台一致性架构（2026-10-26 新增）
+
+现在有 **5 条同步链路**，共同把四个平台（迈金/OneLap、IGPSPORT、Strava、行者）对齐：
+
+```
+                    ┌──────────────┐
+   迈金云端 ────────▶│  迈金        │  www.onelap.cn  (数据源 + 写入目标)
+   (OneLap)         │  (OneLap)    │  u.onelap.cn 是旧副本，total 少 2 条
+                    └──────┬───────┘
+                           │ ① 迈金 → IGPSPORT
+                           ▼
+                    ┌──────────────┐
+   Strava ─────────▶│  IGPSPORT    │  服务端**有**去重
+                    └──────┬───────┘
+                           │
+   ② Strava → 迈金 ────────┤
+   ③ Strava → IGPSPORT ────┤
+   ④ Strava → 行者 ────────┤
+                           ▼
+                    ┌──────────────┐
+                    │  行者        │  服务端有去重（私有接口可删）
+                    └──────────────┘
+```
+
+**脚本清单**：
+
+| 脚本 | 方向 | 服务端去重 | 备注 |
+|---|---|---|---|
+| `magene-to-igp.py` | 迈金 → IGPSPORT | ✅ IGPS 有 | 原始链路 |
+| `strava-to-onelap.py` | Strava → 迈金 | ❌ **无** | 客户端闸门是硬要求 |
+| `strava-to-igp.py` | Strava → IGPSPORT | ✅ IGPS 有 | |
+| `strava-to-xingzhe-sync.py` | Strava → 行者 | ✅ 行者有 | |
+
+**cron 入口**（`~/.hermes/scripts/` 下必须是真文件）：
+| 时间 | 任务 | job_id |
+|---|---|---|
+| 11:00 | GitHub Trending | `e62707669d50` |
+| 11:05 | 迈金 → IGPSPORT | `3e3e0194d61b` |
+| 11:10 | Strava → 行者 | `3670c2356238` |
+| 11:15 | **Strava → 迈金** | `49f30ba58248` |
+| 11:20 | AI 文章抓取 | `701069159aac` |
+| 11:25 | **Strava → IGPSPORT** | `6d0ed8687cf1` |
+
+### ⚠ 迈金上传接口要点（实测 2026-10-26）
+
+```python
+POST https://www.onelap.cn/api/otm/ride_record/upload/fit
+multipart/form-data，文件字段名固定为 **jilu0**
+headers: Authorization: <OneLap JWT>, Origin: https://www.onelap.cn, Referer: .../analysis
+返回: {"code":200,"data":{"success_count":1,"failed_count":0,...}}
+```
+- **没有服务端去重** —— 重复上传会真的多出一条记录（实测把 10-25 的活动传了 2 次 → 2 条）。
+  客户端闸门是**硬要求**，不是优化项。
+- 删除误传：`DELETE https://www.onelap.cn/api/otm/ride_record/delete/{record_id}`
+- 迈金上传是**异步入库**：上传后可能几十秒才出现在列表里，回读校验要轮询。
+
+### ⚠ 迈金 FIT 里的 name 是空的
+从 Strava 传过去的 FIT 在迈金侧 `name=None`、`type=24`。
+迈金原生记录有名字（`type=13` 竞技 / `48` 自由骑行 / `27` 普通 / `49` 路线）。
+标题在迈金 App 里可能显示为空 —— **这是迈金侧对外部导入 FIT 的处理，不是数据丢了**。
+
+## ⚠⚠⚠ 同步窗口必须是 day-2 ~ day-0（含今天），且要留数据到达缓冲（2026-10-26）
 
 **症状**：App 里骑了 2 次，行者只有 1 次。cron 报告「Strava 候选 2 条」，
 但 Strava API 实际有 4 条 —— **少的 2 条在 cron 跑的那一刻还没到 Strava**。
