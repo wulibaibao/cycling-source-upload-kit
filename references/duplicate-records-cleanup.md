@@ -6,7 +6,7 @@
 |---|---|---|---|
 | 迈金 / OneLap | 456 | **0** | — |
 | 行者 | 308 → **301** | 7 组 | ✅ `DELETE /api/v1/pgworkout/{id}` |
-| IGPSPORT | 516 | **74**（`dataStatus=4`） | ❌ 无删除 API，只能找客服 |
+| IGPSPORT | 519 | **74** | ❌ 无删除 API（2026-10-26 穷尽排查确认） |
 | Strava | 361 | 1 组（0.00km 空活动） | ✅ `DELETE /api/v3/activities/{id}` |
 
 ## 1. 行者：可以删
@@ -61,24 +61,77 @@ for a in [x for x in xz if x.get("credits") == 0]:
 迈金**有**删除接口：`DELETE /api/otm/ride_record/delete/{id}` ✅（实测有效，
 清理过一条探测产生的重复 `6adee216b48d416dc20c9a94`）。
 
-## 3. IGPSPORT：删不掉
+## 3. IGPSPORT：74 组真重复，但删不掉
 
-`queryMyActivity` 返回的 516 条里有 **74 条 `dataStatus=4`**，每条都能找到一条
-`dataStatus=1` 的**同日期同距离**副本（例：`57995298` 与 `57952733` 都是 2026-01-29 / 26812.8m）。
+### 3.1 ⚠️ `dataStatus=4` 不是「影子副本」标记（2026-10-26 修正）
 
-- `dataStatus=1`：正常条目，`title` 是有意义的名字（`MATCH_470592-2026-10-26-07-03-27-log`）。
-- `dataStatus=4`：文件级副本，`title` 是原始文件名（`18615857830.fit`），但 `rideDistance`/`totalAscent`/`avgSpeed`/`analysisStatus=1` **数据完全正常**。
-- 这是早期去重还没做好时批量上传留下的。
+早期文档写「`dataStatus=4` = 影子副本」是**错的**。实测 519 条的状态分布：
 
-**服务端无法删除**：`deleteActivity` / `delete` / `remove` / `delActivity` / `removeActivity` 等
-端点全部返回 `{"code":1003,"message":"服务器异常"}`（带签名也一样），不存在可用的删除 API。
-列表接口也不提供 `dataStatus` 过滤参数（`totalRows` 恒为 516）。
+| `dataStatus` | 条数 | `analysisStatus` | `errorType` | 性质 |
+|---|---|---|---|---|
+| `1` | 438 | 全 1 | 0/缺 | 正常条目 |
+| `4` | 75 | **全 1（分析已完成）** | 0/缺 | **正常分析完的活动**，只是被判重留下的 |
+| `0` | 6 | 1/0 | **1** | ⚠️ **这才是真正的错误记录**（含 1 条 0.0m 空活动） |
 
-**推测**：App 端按 `dataStatus` 过滤，只显示 `dataStatus=1`。**未经用户确认**。
+`dataStatus=4` 的记录：功率/踏频/心率/爬升**数据完整**，不是残缺条目。
+`dataStatus=0` 的 6 条才带 `errorType=1`（分析失败）—— 其中 `57995529` 距离 0.0m。
 
-**如果 App 里确实看到重复**：只能找 IGPSPORT 客服让他们后台清理，没有自助路径。
+### 3.2 74 组重复的判定口径（用容差，不要用字符串相等）
 
-**不影响同步**：去重闸门比对的是 `dataStatus=1` 的记录，重复副本不会干扰匹配。
+早期统计出「72 条缺 3 条」是**精度误报** —— 迈金 65.12km vs IGPS 65116.7m 直接比字符串。
+**必须用容差匹配**：
+
+```python
+# 同日期 + 距离差 ≤ 0.5m + 时长完全相同 → 真重复
+if abs(a["rideDistance"] - b["rideDistance"]) <= 0.5 and a["recordTime"] == b["recordTime"]:
+```
+
+改用容差后：**74 组严格重复**（距离完全相等、时长完全相等，零误差）。
+
+### 3.3 两组的来源不同
+
+| | title 格式 | 示例 |
+|---|---|---|
+| 正式条目 | `MATCH_<uid>-YYYY-MM-DD-HH-MM-SS-log` | `MATCH_470592-2026-02-25-20-48-…` |
+| 重复副本 | 纯数字 `.fit` | `18615857830.fit` |
+
+副本 title 里的数字**不是 Strava activity ID**（逐个查 Strava API 全部 404），
+是迈金云端自己的 FIT 编号。副本详情里有 `dataSyncStravaStatus=99`。
+
+涉及日期集中在 **2025-09 ~ 2025-11** 和 **2026-01 ~ 2026-02** 两段。
+
+### 3.4 删除接口：2026-10-26 穷尽排查，确认没有
+
+**候选端点**（`deleteActivity` / `delete` / `remove` / `delActivity` / `removeActivity` /
+`batchDelete` / `deleteById` / `deleteRecord` / `deleteFile` / `deleteUpload` /
+`deleteUserActivity` / `deleteUserSport` / `deleteMyActivity` / `cancelActivity` 等）
+全部返回 `{"code":1003,"message":"服务器异常"}`（带正确签名也一样）。
+
+**排查覆盖**：
+- Web App 全部 50 条路径 —— 无删除端点
+- GitHub 上 4 个成熟第三方实现（`NenoSann/igpsport_sync`、`Dunky-Z/FitSync`、
+  `Anathleticbicyclist/sports-data-sync-multiplatform`、`fooooxxxx/igpsport-export-fit-files`）
+  —— 都只有查询/详情/下载/上传
+- 盲扫 **1600+** 个「前缀 × 方法名」组合 —— 全无命中
+
+**⚠️ 排查方法论见 `references/igpsport-api-probe.md`** —— 里面有可靠的
+「端点存在 / 不存在」判据（别再被 `Allow: DELETE` 误导），以及从 JS bundle /
+GitHub 搜索提取端点路径的正确姿势。
+
+唯一半成品是 `mergeActivities`（合并活动），参数 `{"rideIds": [...]}`：
+对重复副本必然返回「合并失败，存在时间重叠」。
+
+### 3.5 用户无感
+
+**✅ 已由用户确认（2026-10-26）**：IGPSPORT App 的活动列表里，同一天同距离的骑行**没有出现两次**。
+App 端只展示 `dataStatus=1`。
+
+- **接口层** 519 条 = 438 条 `dataStatus=1` + 75 条 `dataStatus=4` + 6 条 `dataStatus=0`
+- **App 端**只展示 `dataStatus=1`，用户无感
+- **服务端删不掉**，但也不需要删 —— 不占用户视图、不干扰同步
+- 列表接口 `totalRows` 恒定且不提供 `dataStatus` 过滤参数 → 副本只在 API 层可见
+
+**不影响同步**：去重闸门比对的是 `dataStatus=1` 的记录，副本不会干扰匹配。
 
 ## 4. Strava
 

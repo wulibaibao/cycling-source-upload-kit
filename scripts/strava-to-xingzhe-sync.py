@@ -293,6 +293,14 @@ SOURCE_COORD_SYSTEM = {
     "edge_ride": "GCJ-02",
 }
 # 目标平台期望什么坐标系（行者原生 = GCJ-02）
+# 目标平台接受的 device 身份。IGPSPORT 会拒收 development(255)/0 身份的 FIT。
+# magene 的 FIT manufacturer id = 115（C706 product=50），从 IGPS 已有记录读出的。
+DEVICE_IDENTITY = {
+    "xingzhe": (255, 0),
+    "onelap": (255, 0),
+    "igp": (107, 50),   # magene=107, C706 product=50
+}
+
 TARGET_COORD_SYSTEM = {
     "xingzhe": "GCJ-02",
     "strava": "WGS-84",
@@ -480,6 +488,7 @@ def build_fit(activity, streams, out_path, to_gcj=True, source="strava", target=
     cad = streams.get("cadence", {}).get("data", [])
     alt = streams.get("altitude", {}).get("data", [])
     dist = streams.get("distance", {}).get("data", [])
+    vsmooth = streams.get("velocity_smooth", {}).get("data", [])
     if not latlng or not times:
         raise RuntimeError(f"活动 {activity['id']} 没有 streams")
 
@@ -517,7 +526,11 @@ def build_fit(activity, streams, out_path, to_gcj=True, source="strava", target=
         coord_note += " | --no-gcj 强制不转换"
 
     enc = Encoder()
-    enc.write_mesg({"mesg_num": 0, "type": 4, "manufacturer": 255, "product": 0,
+    # device 身份：IGPSPORT 按 manufacturer/product 识别来源设备，
+    # `development`(255/0) 的 FIT 会被 uploadByOss 收下但**不入库**（实测）。
+    # 伪装成 magene C706：manufacturer=107（magene），product=50（C706）。
+    _mf, _pf = DEVICE_IDENTITY.get(target, (255, 0))
+    enc.write_mesg({"mesg_num": 0, "type": 4, "manufacturer": _mf, "product": _pf,
                     "serial_number": 0,
                     "time_created": int((start - FIT_EPOCH).total_seconds())})
     enc.write_mesg({
@@ -546,6 +559,10 @@ def build_fit(activity, streams, out_path, to_gcj=True, source="strava", target=
             rec["distance"] = float(dist[i])
         if i < len(alt) and alt[i] is not None:
             rec["altitude"] = float(alt[i])
+            rec["enhanced_altitude"] = float(alt[i])
+        if i < len(vsmooth) and vsmooth[i] is not None:
+            rec["speed"] = float(vsmooth[i])
+            rec["enhanced_speed"] = float(vsmooth[i])
         if i < len(hr) and hr[i] is not None:
             rec["heart_rate"] = int(hr[i])
         if i < len(watts) and watts[i] is not None:

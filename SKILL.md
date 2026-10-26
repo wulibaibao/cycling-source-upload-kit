@@ -1,35 +1,43 @@
 ---
 name: cycling-data-upload
-description: Use when uploading cycling FIT data to Strava, 行者/XOSS (imxingzhe.com), or IGPSPORT; when syncing 迈金/Magene, 顽鹿/OneLap, or Strava activities to a Chinese platform; when debugging duplicate activities, coordinate offsets (GCJ-02/WGS-84), FIT token refresh, or the daily 11:00-11:20 sync jobs. Covers Strava→行者, 迈金→IGPSPORT, and manual FIT→Strava upload.
+description: Use when uploading cycling FIT data to Strava, 行者/XOSS (imxingzhe.com), or IGPSPORT; when syncing 迈金/Magene, 顽鹿/OneLap, or Strava activities to a Chinese platform; when debugging duplicate activities, coordinate offsets (GCJ-02/WGS-84), FIT token refresh, or the daily 11:00-11:20 sync jobs. Covers Strava→行者, 迈金→IGPSPORT, Strava→迈金, and manual FIT→Strava upload.
 license: MIT
-version: 1.0.0
+version: 1.1.0
 ---
 
-# 骑行数据上传（Strava / 行者 / IGPSPORT）
+# 骑行数据上传与多平台互同步（Strava / 行者 / IGPSPORT / 迈金）
 
-三条上传链路的统一 skill。
+四条上传链路的统一 skill。
 
-| 链路 | 方向 | 源 → 目标 | 坐标系 | 定时 job |
-|---|---|---|---|---|
-| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | `3670c2356238` 每天 11:10 |
-| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | `3e3e0194d61b` 每天 11:05 |
-| **C** | 本地 FIT → Strava | 用户发的 FIT → Strava API | **需转** GCJ-02→WGS-84 | 手动 |
+| 链路 | 方向 | 源 → 目标 | 坐标系 | 定时 job | 状态 |
+|---|---|---|---|---|---|
+| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | `3670c2356238` 每天 11:10 | ✅ 运行中 |
+| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | `3e3e0194d61b` 每天 11:05 | ✅ 运行中 |
+| **C** | 本地 FIT → Strava | 用户发的 FIT → Strava API | **需转** GCJ-02→WGS-84 | 手动 | ✅ |
+| **D** | Strava → 迈金 | Strava streams → 重建 FIT → 迈金 | **需转** GCJ-02 | `49f30ba58248` 每天 11:15 | ⏸️ **已暂停**（2026-10-26 用户要求） |
 
-**坐标系是三条链路最大的差异 —— 详见下方「坐标系矩阵」，搞错就是 400-500m 偏移。**
+**坐标系是四条链路最大的差异 —— 详见下方「坐标系矩阵」，搞错就是 400-500m 偏移。**
+
+> **链路 D 暂停说明**：脚本、skill 副本、GitHub 代码**全部保留**，随时可 `resume`。
+> 暂停只停「往迈金写」，不影响链路 B（从迈金**读**数据传到 IGPSPORT）。
+> 之前已导入迈金的 4 条 Strava 活动**仍在迈金云端**（暂停不回滚历史数据）。
 
 ## 脚本（都在 `scripts/`）
 
 | 脚本 | 用途 |
 |---|---|
 | `strava-to-xingzhe-sync.py` | 链路 A 主脚本 |
-| `run-xingzhe-sync.py` | 链路 A cron 入口（day-2~day-1 窗口，无新活动零输出） |
+| `run-xingzhe-sync.py` | 链路 A cron 入口（day-2~day-0 窗口，无新活动零输出） |
 | `onelap_client.py` | 迈金/顽鹿 API 客户端（登录/列表/详情/FIT 下载/签名） |
 | `igp_client.py` | IGPSPORT API 客户端（短信登录/刷新/三步 OSS 上传/签名） |
 | `magene-to-igp.py` | 链路 B 主脚本 |
 | `run-magene-igp-sync.py` | 链路 B cron 入口 |
+| `strava-to-onelap.py` | 链路 D 主脚本（Strava → 迈金，⏸️ 已暂停） |
+| `run-onelap-sync.py` | 链路 D cron 入口（⏸️ 已暂停） |
 | `_serial_lock.py` | 全局串行锁（所有 cron 入口共用，见下方「全局串行锁」） |
 | `export-skill.sh` | 安全导出到 GitHub（打包前扫真值 + 校验副本一致） |
 | `strava-upload.py` | 链路 C 主脚本（手动上传单个 FIT） |
+| `verify-no-drift.py` | 生产 / skill / GitHub 三副本一致性校验（`--fix` 自动同步） |
 
 ## 凭据（**不含任何密钥**）
 
@@ -65,7 +73,7 @@ version: 1.0.0
 
 ## ⚠️ 历史重复记录 → `references/duplicate-records-cleanup.md`
 
-四平台都查过：迈金 0、行者 7（已清，**行者有删除接口**）、IGPSPORT 74（删不掉，只能找客服）、Strava 1 组空活动。
+四平台都查过：迈金 0、行者 7（已清，**行者有删除接口**）、IGPSPORT 74（**接口层影子副本，App 端不显示，已确认**）、Strava 1 组空活动。
 **不影响同步**（去重只比对正常条目）。
 
 
@@ -135,13 +143,47 @@ hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 > （2026-10-26 实测：Strava → IGPSPORT 传 2 条，服务端一条没入库。）
 
 **cron 入口**（`~/.hermes/scripts/` 下必须是真文件）：
-| 时间 | 任务 | job_id |
+| 时间 | 任务 | job_id | 状态 |
+|---|---|---|---|
+| 11:00 | GitHub Trending | `e62707669d50` | ✅ |
+| 11:05 | 迈金 → IGPSPORT | `3e3e0194d61b` | ✅ |
+| 11:10 | Strava → 行者 | `3670c2356238` | ✅ |
+| 11:15 | **Strava → 迈金** | `49f30ba58248` | ⏸️ **已暂停** |
+| 11:20 | AI 文章抓取 | `701069159aac` | ✅ |
+
+### ⚠ IGPSPORT 按内容指纹判重 —— 「重传已有活动」是做不到的（2026-10-26 实测）
+
+**这是踩过的最费时间的坑**：用户说「重新传一条」，传了 5 次，每次都返回
+`{"code":0,"message":"success"}`，但 IGPSPORT 列表**纹丝不动**。
+
+实测矩阵（5-30 那条，144.84km / 17990s / md5 `4ad2748d…`）：
+
+| 上传内容 | filename | 结果 |
 |---|---|---|
-| 11:00 | GitHub Trending | `e62707669d50` |
-| 11:05 | 迈金 → IGPSPORT | `3e3e0194d61b` |
-| 11:10 | Strava → 行者 | `3670c2356238` |
-| 11:15 | **Strava → 迈金** | `49f30ba58248` |
-| 11:20 | AI 文章抓取 | `701069159aac` |
+| 迈金云端原始 FIT | `Magene_C706_1780093970_470592_1780119879235.fit`（与现存**完全同名**） | ❌ 不入库 |
+| 同上 | 改名 `…_STRAVA_0530.fit` | ❌ 不入库 |
+| 同上 | `MATCH_470592-2026-05-30-06-32-51-log.fit` | ❌ 不入库 |
+| Strava streams 重建 FIT | `MATCH_…-strava.fit` | ❌ 不入库 |
+| 已入库的 8-22 FIT 原样重传 | `MATCH_470592-2026-08-22-04-22-24-log.fit` | ❌ 不入库 |
+
+**改名、改内容都绕不过** —— 判重看的是 FIT 内的时间+距离指纹。
+
+> **铁律：往 IGPSPORT 传之前，先查 IGPSPORT 有没有同日期同距离的记录。**
+> 有 → 传了也是白传，直接告诉用户「这条已经在库里」并汇报现有数据。
+> 没有 → 传上去必然入库（8-22 / 8-15 / 9-12 三条当天都成功入库，正是因为当时没有对应记录）。
+
+**对照：8-22 为什么能传进去？** IGPS 当时只有原生 Strava 同步来的 244.97km 版本，
+和要传的 221.53km **内容不同** → 指纹不撞 → 入库。
+
+**FIT 字段完整度也影响分析**：原始码表 FIT 有 15 种消息
+（`lap`/`event`/`weather_conditions`/`software`/`bike_profile`/`device_info`/
+`developer_data_id` + record 级 `temperature`/`grade`/`calories`/`power`/`cadence`），
+streams 重建只有 3 种（`file_id`/`session`/`record`）。
+**能用原始 FIT 就用原始的**，重建只作兜底。
+
+** Strava 原始文件下载：做不到**（`/api/v3/activities/{id}/download` 全 404，非 Premium 付费功能；
+`/api/v3/uploads/{upload_id}` 只给 `external_id` 文件名不给链接）。
+唯一路径是 streams 重建。细节见 `references/igpsport-api-probe.md`。
 
 ### ⚠ 迈金上传接口要点（实测 2026-10-26）
 
@@ -423,16 +465,20 @@ margin > 0 ⇒ WGS-84
 
 ## 定时任务
 
-| job_id | 名称 | 时间 | 脚本 |
-|---|---|---|---|
-| `3670c2356238` | Strava→行者 每日同步 | 每天 **11:10** | `run-xingzhe-sync.py` |
-| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 **11:05** | `run-magene-igp-sync.py` |
+| job_id | 名称 | 时间 | 脚本 | 状态 |
+|---|---|---|---|---|
+| `3670c2356238` | Strava→行者 每日同步 | 每天 **11:10** | `run-xingzhe-sync.py` | ✅ |
+| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 **11:05** | `run-magene-igp-sync.py` | ✅ |
+| `49f30ba58248` | Strava→迈金 每日同步 | 每天 **11:15** | `run-onelap-sync.py` | ⏸️ 已暂停 |
+| `e62707669d50` | GitHub Trending | 每天 **11:00** | `run-github-trending-refresh.py` | ✅ |
+| `701069159aac` | AI 文章抓取 | 每天 **11:20** | `run-ai-article-scrape.py` | ✅ |
 
 都 `no_agent=true`（脚本模式）。
 
-**窗口 = day-2 ~ day-1（前天 + 昨天）00:00~23:59**，不要改成"最近 N 天"（会拉大量历史，撞库闸门成本高）。
-- 2026-10-26 修正：原为 **day-2 单日**。cron 在 11:05 跑，只扫前天 → 昨天骑的活动当天扫不到，
-  要等后天 11:05 才同步（用户反馈「同步没生效」）。改成 day-2~day-1 后，昨天骑的最迟次日 11:10 入库。
+**窗口 = day-2 ~ day-0（前天 + 昨天 + 今天）00:00~23:59**，不要改成"最近 N 天"（会拉大量历史，撞库闸门成本高）。
+- 2026-10-26 修正：原为 **day-2~day-1**。cron 在 11:05 跑，漏掉「今天早上」骑的
+  （一天两练时 day-1 只覆盖一条）→ 改成 day-2~day-0。
+- 源平台数据到达有延迟（Strava 批量上传可能中午才到），D2–D0 窗口 + 次日补扫覆盖。
 - 服务端去重闸门（行者 workout_id / IGPSPORT md5）保证 day-2 已同步的不会重复上传。
 
 输出规则：有新同步/失败 → 报告给 QQ；无新活动 → 零字节输出（静默）。
@@ -520,6 +566,10 @@ python3 ~/magene-to-igp.py --since 2026-09-25 --until 2026-10-25 --limit 50
 - `references/strava-xingzhe-sync-detail.md` — 链路 A 完整细节（投票法实现、9006 真相、健康检查、坏记录自动清理）
 - `references/magene-igp-sync-detail.md` — 链路 B 完整细节（OneLap 签名、三步 OSS、token 续期）
 - `references/strava-upload-detail.md` — 链路 C 完整细节（Strava API 政策、OAuth 流程、标题算法、水平偏移五分类、诊断脚本）
+- `references/igpsport-api-probe.md` — **IGPSPORT 接口探测方法论**（端点存在/不存在判据、从 JS bundle / GitHub 搜索提取路径、内容指纹判重机制、功率缺失归因）
+- `references/platform-api-facts.md` — 各平台接口事实速查（登录/列表/详情/下载/删除端点）
+- `references/four-platform-reconciliation.md` — 四平台全量盘点与历史缺口补传
+- `references/duplicate-records-cleanup.md` — 重复记录识别与清理（含 `dataStatus` 语义修正、容差匹配口径）
 - `references/strava-streams-to-fit.md` — Strava Streams → FIT 重建（跨平台同步到国产平台的核心）
 - `references/magene-c706-gcj02-offset.md` — GCJ-02 系统偏移识别（OSM 双向验证）
 - `references/fit-method-comparison.md` — 三种 FIT 修复方法决策树

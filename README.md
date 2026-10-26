@@ -17,15 +17,18 @@
 
 ## 它解决什么问题
 
-骑行数据散落在三个平台，各自的 API 都是逆向出来的，且**坐标系处理各不相同** —— 搞错就是 400-500m 偏移。本工具集把三条链路的完整实现和踩过的坑打包在一起：
+骑行数据散落在**四个平台**（Strava、行者/XOSS、IGPSPORT、迈金/顽鹿 OneLap），
+各自的 API 都是逆向出来的，且**坐标系处理各不相同** —— 搞错就是 400-500m 偏移。
+本工具集把四条链路的完整实现和踩过的坑打包在一起：
 
 | 链路 | 方向 | 坐标系 | 说明 |
 |---|---|---|---|
 | **A** | Strava → 行者 | **需转** GCJ-02 | Strava 无原始文件下载（付费墙），只能拉 streams 重建 FIT |
 | **B** | 迈金 → IGPSPORT | **不转** | 两边都按 GCJ-02 存，实测坐标差 0.00 m |
 | **C** | 本地 FIT → Strava | **需转** GCJ-02→WGS-84 | `--correct-coords` |
+| **D** | Strava → 迈金 | **需转** GCJ-02 | 迈金**无服务端去重**，客户端闸门是硬要求 |
 
-**坐标系是三条链路最大的差异。** 不要因为"国内平台都用 GCJ-02"就一刀切 —— IGPSPORT 是个例外。
+**坐标系是四条链路最大的差异。** 不要因为"国内平台都用 GCJ-02"就一刀切 —— IGPSPORT 是个例外。
 
 ## 快速开始
 
@@ -47,7 +50,22 @@ python3 scripts/magene-to-igp.py --since 2026-09-25 --until 2026-10-25 --limit 5
 
 # 3c. Strava → 行者 同步
 python3 scripts/strava-to-xingzhe-sync.py --since 2026-10-01 --until 2026-10-20 --limit 30
+
+# 3d. Strava → 迈金 同步
+python3 scripts/strava-to-onelap.py --since 2026-10-01 --until 2026-10-20 --limit 30
 ```
+
+### ⚠ 各链路的去重差异（配置前必读）
+
+| 链路 | 目标平台服务端去重 | 客户端闸门 |
+|---|---|---|
+| A → 行者 | ✅ 有 | 三层（活动索引 / uploads MD5 / state） |
+| B → IGPSPORT | ✅ 有（按 FIT 内容指纹） | 索引比对 |
+| D → 迈金 | ❌ **完全没有** | **硬要求** —— 重复上传会真的多出一条记录 |
+
+**IGPSPORT 的「服务端去重」是内容指纹级别**：FIT 内的时间+距离相同就判重，
+**改名、改内容都绕不过**。所以往 IGPSPORT 传之前必须先查它有没有同日期同距离的记录 ——
+有的话传了也是白传。详见 `references/igpsport-api-probe.md`。
 
 ## 核心特性
 
@@ -101,9 +119,10 @@ cycling-source-upload-kit/
 │   ├── strava-upload.py            # 链路 C 主脚本
 │   ├── strava-to-onelap.py         # 链路 D 主脚本（Strava → 迈金）
 │   ├── run-onelap-sync.py          # 链路 D cron 入口
+│   ├── verify-no-drift.py          # 生产/skill/GitHub 三副本一致性校验
 │   ├── export-skill.sh             # 导出/发布（含密钥扫描）
 │   └── correct_*.py                # 坐标纠偏诊断工具
-└── references/                 # 24 篇详细文档
+└── references/                 # 25 篇详细文档
 ```
 
 ## 定时任务
@@ -152,6 +171,10 @@ cat ~/.hermes/run/serial.lock   # 查看当前持锁者
 | `references/magene-igp-sync-detail.md` | 链路 B 完整细节（OneLap 签名、三步 OSS 上传） |
 | `references/strava-upload-detail.md` | 链路 C 完整细节（OAuth、标题算法、偏移五分类） |
 | `references/strava-streams-to-fit.md` | Strava Streams → FIT 重建 |
+| `references/igpsport-api-probe.md` | IGPSPORT 接口探测方法论（端点判据、内容指纹判重、功率缺失归因） |
+| `references/platform-api-facts.md` | 各平台接口事实速查 |
+| `references/four-platform-reconciliation.md` | 四平台全量盘点与历史缺口补传 |
+| `references/duplicate-records-cleanup.md` | 重复记录识别与清理（含 `dataStatus` 语义修正） |
 | `references/fit-method-comparison.md` | 三种 FIT 修复方法决策树 |
 | `references/fitdecode-encoder-pitfalls.md` | fitdecode + Encoder 实操坑 |
 | `references/xingzhe-api-mechanics.md` | 行者 API 细节（OpenAPI vs 私有接口） |
