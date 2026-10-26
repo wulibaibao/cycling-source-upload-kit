@@ -63,10 +63,10 @@ version: 1.0.0
 **只补近 30 天的真实缺口**，2024–2025 的老活动本来是逐年手工同步的，批量灌进去反而污染数据。
 
 
-## ⚠️ IGPSPORT 有 74 条历史重复记录 → `references/igpsport-duplicate-records.md`
+## ⚠️ 历史重复记录 → `references/duplicate-records-cleanup.md`
 
-服务端删不掉（无删除 API），推测 App 端按 `dataStatus` 过滤只显示正常条目。
-**不影响同步**（去重只比对正常条目）。详情见 reference。
+四平台都查过：迈金 0、行者 7（已清，**行者有删除接口**）、IGPSPORT 74（删不掉，只能找客服）、Strava 1 组空活动。
+**不影响同步**（去重只比对正常条目）。
 
 
 ## ⚠️ 盘点时的两个自伤坑（2026-10-26 踩过）
