@@ -19,7 +19,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 sys.path.insert(0, str(HERE))
-from _serial_lock import acquire as _acquire, release as _release
+from _serial_lock import acquire as _acquire, release as _release, holder as _holder
 
 # 博客项目根目录：可用 BLOG_DIR 环境变量覆盖，默认 ~/wulibaibao-blog
 # （不用绝对个人路径，公开仓库里不含个人路径）
@@ -36,8 +36,12 @@ def main() -> int:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     # 全局串行锁：抢不到 → 别的任务在跑，本轮静默放弃（不排队、不堆叠）。
-    lock_fd = _acquire("ai-article-scrape")
+    # wait_s=240：AI 抓取本身要 3-9 分钟，是最长的一条，11:20 那轮
+    # 前面若还有任务在跑，很容易被挡。给 4 分钟等待窗口接上。
+    lock_fd = _acquire("ai-article-scrape", wait_s=240)
     if lock_fd is None:
+        print(f"⚠️ AI 文章抓取 本轮未执行：全局锁被占用（持锁: {_holder()}）")
+        print(f"   下一个 cron 窗口会自动重试。")
         return 0
 
     try:
