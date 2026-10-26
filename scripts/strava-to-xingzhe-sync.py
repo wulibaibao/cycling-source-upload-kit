@@ -641,7 +641,13 @@ def main():
     ap.add_argument("--since", help="YYYY-MM-DD，默认本月 1 号")
     ap.add_argument("--until", help="YYYY-MM-DD，默认今天")
     ap.add_argument("--limit", type=int, default=30)
-    ap.add_argument("--types", default="Ride", help="逗号分隔的 Strava type 白名单")
+    # 2026-10-26：默认白名单加入 VirtualRide。
+    # 原因：用户有 VirtualRide 类型的活动（室内/虚拟骑行，2026-10-25 实测 20.0km
+    # #20720920299，带 3322 个 GPS 点 + 心率 + 踏频，数据完整可传）。
+    # 原先只认 "Ride" → 这类活动被静默过滤，永远传不到行者。
+    # SPORT_MAP 里本来就有 VirtualRide→3 的映射，只是白名单把它挡在门外。
+    ap.add_argument("--types", default="Ride,VirtualRide",
+                    help="逗号分隔的 Strava type 白名单（默认含 VirtualRide）")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--no-gcj", action="store_true", help="不做 WGS-84→GCJ-02 纠偏")
     ap.add_argument("--force-id", type=int, action="append", default=[],
