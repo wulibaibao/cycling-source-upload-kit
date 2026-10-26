@@ -296,6 +296,12 @@ SOURCE_COORD_SYSTEM = {
 TARGET_COORD_SYSTEM = {
     "xingzhe": "GCJ-02",
     "strava": "WGS-84",
+    # 迈金（OneLap/顽鹿）在中国境内用 GCJ-02 —— 实测迈金云端既有活动
+    # 与 IGPSPORT 同一条的坐标差 0.00 m，两边都是 GCJ-02。
+    "onelap": "GCJ-02",
+    # IGPSPORT 中国境内也是 GCJ-02 —— 实测迈金云端既有活动与 IGPSPORT
+    # 同一条记录坐标差 0.00 m。
+    "igp": "GCJ-02",
 }
 
 
