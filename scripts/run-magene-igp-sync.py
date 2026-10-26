@@ -25,7 +25,12 @@ SKILL_SCRIPTS = HERMES_HOME / "skills" / "cycling-data-upload" / "scripts"
 
 
 def main() -> int:
-    TARGET = (datetime.now().date() - timedelta(days=2)).isoformat()
+    # 2026-10-26 修复：窗口 day-2 ~ day-1（同 strava 入口）。
+    # 原先只有 day-2 单日，昨天(10-25)骑的要等到后天才同步。
+    _now = datetime.now().date()
+    D2 = (_now - timedelta(days=2)).isoformat()
+    D1 = (_now - timedelta(days=1)).isoformat()
+    TARGET = f"{D2} ~ {D1}"
     LOG_DIR = HERMES_HOME / "xingzhe_sync" / "logs"
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     LOG = LOG_DIR / f"magene-igp-{datetime.now():%Y%m%d}.log"
@@ -37,7 +42,7 @@ def main() -> int:
 
     try:
         cmd = [sys.executable, str(SKILL_SCRIPTS / "magene-to-igp.py"),
-               "--since", TARGET, "--until", TARGET, "--limit", "30"]
+               "--since", D2, "--until", D1, "--limit", "30"]
 
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SKILL_SCRIPTS) + ":" + env.get("PYTHONPATH", "")
