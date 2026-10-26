@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _serial_lock import acquire as _acquire, release as _release
+from _serial_lock import acquire as _acquire, release as _release, holder as _holder
 
 # 主脚本本体在 skill 目录（单一真相）。cron 入口本身必须是
 # ~/.hermes/scripts/ 下的真文件 —— cron 会 resolve() 软链接并要求路径
@@ -34,9 +34,14 @@ LOG_DIR = HERMES_HOME / "xingzhe_sync" / "logs"
 def main():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     # 全局串行锁：所有定时任务共用一把，保证「一个个进行」。
-    # 抢不到锁 → 别的任务正在跑，本轮静默放弃（不排队、不堆叠）。
-    lock_fd = _acquire("xingzhe-sync")
+    # wait_s=180：cron 间隔 5 分钟，但 AI 抓取要 3-9 分钟。
+    # 抢不到就等最多 3 分钟 —— 前一个任务结束后接上跑完。
+    # 仍抢不到 → 明确报告（不再静默），否则用户无法区分
+    # 「这轮没跑」和「跑了但没新数据」。
+    lock_fd = _acquire("xingzhe-sync", wait_s=180)
     if lock_fd is None:
+        print(f"⚠️ Strava→行者 本轮未执行：全局锁被占用（持锁: {_holder()}）")
+        print(f"   下一个 cron 窗口会自动重试。")
         return 0
 
     try:
