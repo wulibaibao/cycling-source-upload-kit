@@ -9,18 +9,48 @@ version: 1.1.0
 
 四条上传链路的统一 skill。
 
-| 链路 | 方向 | 源 → 目标 | 坐标系 | 定时 job | 状态 |
-|---|---|---|---|---|---|
-| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | `3670c2356238` 每天 11:10 | ✅ 运行中 |
-| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | `3e3e0194d61b` 每天 11:05 | ✅ 运行中 |
-| **C** | 本地 FIT → Strava | 用户发的 FIT → Strava API | **需转** GCJ-02→WGS-84 | 手动 | ✅ |
-| **D** | Strava → 迈金 | Strava streams → 重建 FIT → 迈金 | **需转** GCJ-02 | `49f30ba58248` 每天 11:15 | ⏸️ **已暂停**（2026-10-26 用户要求） |
+| 链路 | 方向 | 源 → 目标 | 坐标系 | 触发方式 |
+|---|---|---|---|---|
+| **A** | Strava → 行者 | Strava streams → 重建 FIT → 行者 | **需转** GCJ-02（投票判定） | 手动 `sync-riding.py` |
+| **B** | 迈金 → IGPSPORT | 迈金云端 FIT → 原样上传 | **不转**（两边都 GCJ-02） | 手动 `sync-riding.py` |
+| **C** | 本地 FIT → Strava | 用户发的 FIT → Strava API | **需转** GCJ-02→WGS-84 | 手动 |
+| **D** | Strava → 迈金 | Strava streams → 重建 FIT → 迈金 | **需转** GCJ-02 | 手动 `sync-riding.py` |
 
 **坐标系是四条链路最大的差异 —— 详见下方「坐标系矩阵」，搞错就是 400-500m 偏移。**
 
-> **链路 D 暂停说明**：脚本、skill 副本、GitHub 代码**全部保留**，随时可 `resume`。
-> 暂停只停「往迈金写」，不影响链路 B（从迈金**读**数据传到 IGPSPORT）。
-> 之前已导入迈金的 4 条 Strava 活动**仍在迈金云端**（暂停不回滚历史数据）。
+## 🔔 同步方式：用户说一声才跑（2026-10-29 起）
+
+**不再有定时同步。** 原来 3 条 cron（11:05 迈金→IGPSPORT / 11:10 Strava→行者 /
+11:15 Strava→迈金）**已全部暂停**。改成用户开口才跑：
+
+```bash
+# 默认窗口：今天往前 3 天（day-2 ~ day-0）
+python3 ~/.hermes/scripts/sync-riding.py
+
+# 其它用法
+python3 ~/.hermes/scripts/sync-riding.py --days 14          # 往前追更久
+python3 ~/.hermes/scripts/sync-riding.py --since 2026-10-20 --until 2026-10-26
+python3 ~/.hermes/scripts/sync-riding.py --only igp          # 只跑某条链路
+python3 ~/.hermes/scripts/sync-riding.py --dry-run          # 试跑，不真传
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--days` | 3 | 窗口天数（day-2 ~ day-0） |
+| `--since` / `--until` | 自动 | 显式指定日期区间 |
+| `--limit` | 30 | 单次最多处理多少条 |
+| `--only` | 全跑 | `igp` / `xingzhe` / `onelap`，可多选 |
+| `--dry-run` | 否 | 试跑，不真正上传 |
+
+**行为约定**：
+- 三条链路**独立执行**，一条失败不影响其它；末尾汇总「✅ 全部链路完成」或列出失败的链路。
+- 复用现有三层去重闸门 → **重复跑幂等**，不会重复上传（输出里是「跳过：已有相同活动」）。
+- 走全局串行锁，和 GitHub Trending / AI 抓取不抢资源。
+- 走 `~/.hermes/skills/cycling-data-upload/scripts/` 下的主脚本，**不调 cron 入口**（cron 入口会吞输出）。
+
+**⚠️ 迈金 token 会过期**：token 文件在 `~/.hermes/igp_sync/onelap_token.json`，
+过期时两条迈金链路会报 `HTTP 403 Authorization fail!`。
+修复：调用 `onelap_client.relogin()`（用 `~/.hermes/igp_sync/onelap_password` 里的密码自动重登）。
 
 ## 脚本（都在 `scripts/`）
 
@@ -32,8 +62,9 @@ version: 1.1.0
 | `igp_client.py` | IGPSPORT API 客户端（短信登录/刷新/三步 OSS 上传/签名） |
 | `magene-to-igp.py` | 链路 B 主脚本 |
 | `run-magene-igp-sync.py` | 链路 B cron 入口 |
-| `strava-to-onelap.py` | 链路 D 主脚本（Strava → 迈金，⏸️ 已暂停） |
-| `run-onelap-sync.py` | 链路 D cron 入口（⏸️ 已暂停） |
+| `strava-to-onelap.py` | 链路 D 主脚本（Strava → 迈金） |
+| `run-onelap-sync.py` | 链路 D cron 入口（已停用，保留） |
+| **`sync-riding.py`** | **手动同步入口 —— 一次跑全部三条链路（用户说一声才跑）** |
 | `_serial_lock.py` | 全局串行锁（所有 cron 入口共用，见下方「全局串行锁」） |
 | `export-skill.sh` | 安全导出到 GitHub（打包前扫真值 + 校验副本一致） |
 | `strava-upload.py` | 链路 C 主脚本（手动上传单个 FIT） |
@@ -142,14 +173,14 @@ hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 > 所以 IGPSPORT 只做**单向接收**（迈金 → IGPSPORT），不做反向补齐。
 > （2026-10-26 实测：Strava → IGPSPORT 传 2 条，服务端一条没入库。）
 
-**cron 入口**（`~/.hermes/scripts/` 下必须是真文件）：
-| 时间 | 任务 | job_id | 状态 |
-|---|---|---|---|
-| 11:00 | GitHub Trending | `e62707669d50` | ✅ |
-| 11:05 | 迈金 → IGPSPORT | `3e3e0194d61b` | ✅ |
-| 11:10 | Strava → 行者 | `3670c2356238` | ✅ |
-| 11:15 | **Strava → 迈金** | `49f30ba58248` | ⏸️ **已暂停** |
-| 11:20 | AI 文章抓取 | `701069159aac` | ✅ |
+**触发方式**（2026-10-29 起全部改手动）：
+| 链路 | 触发 | 原 cron |
+|---|---|---|
+| 迈金 → IGPSPORT | `sync-riding.py` | `3e3e0194d61b` 11:05 ⏸️ |
+| Strava → 行者 | `sync-riding.py` | `3670c2356238` 11:10 ⏸️ |
+| Strava → 迈金 | `sync-riding.py` | `49f30ba58248` 11:15 ⏸️ |
+| GitHub Trending | cron | `e62707669d50` 11:00 ✅ |
+| AI 文章抓取 | cron | `701069159aac` 11:20 ✅ |
 
 ### ⚠ IGPSPORT 按内容指纹判重 —— 「重传已有活动」是做不到的（2026-10-26 实测）
 
@@ -465,13 +496,23 @@ margin > 0 ⇒ WGS-84
 
 ## 定时任务
 
-| job_id | 名称 | 时间 | 脚本 | 状态 |
-|---|---|---|---|---|
-| `3670c2356238` | Strava→行者 每日同步 | 每天 **11:10** | `run-xingzhe-sync.py` | ✅ |
-| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 每天 **11:05** | `run-magene-igp-sync.py` | ✅ |
-| `49f30ba58248` | Strava→迈金 每日同步 | 每天 **11:15** | `run-onelap-sync.py` | ⏸️ 已暂停 |
-| `e62707669d50` | GitHub Trending | 每天 **11:00** | `run-github-trending-refresh.py` | ✅ |
-| `701069159aac` | AI 文章抓取 | 每天 **11:20** | `run-ai-article-scrape.py` | ✅ |
+**骑行同步已全部改为手动**（2026-10-29）：3 条 cron 全部暂停，
+用户说「同步骑行」时跑 `sync-riding.py`。见上方「同步方式」。
+
+**仍运行的 cron**（与骑行无关）：
+
+| job_id | 名称 | 时间 | 脚本 |
+|---|---|---|---|
+| `e62707669d50` | GitHub Trending | 每天 **11:00** | `run-github-trending-refresh.py` |
+| `701069159aac` | AI 文章抓取 | 每天 **11:20** | `run-ai-article-scrape.py` |
+
+**已暂停的骑行 cron**（脚本保留，可 resume）：
+
+| job_id | 名称 | 原时间 | 脚本 |
+|---|---|---|---|
+| `3e3e0194d61b` | 迈金→IGPSPORT 每日同步 | 11:05 | `run-magene-igp-sync.py` |
+| `3670c2356238` | Strava→行者 每日同步 | 11:10 | `run-xingzhe-sync.py` |
+| `49f30ba58248` | Strava→迈金 每日同步 | 11:15 | `run-onelap-sync.py` |
 
 都 `no_agent=true`（脚本模式）。
 

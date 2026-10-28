@@ -28,6 +28,15 @@
 | **C** | 本地 FIT → Strava | **需转** GCJ-02→WGS-84 | `--correct-coords` |
 | **D** | Strava → 迈金 | **需转** GCJ-02 | 迈金**无服务端去重**，客户端闸门是硬要求 |
 
+**同步是手动的** —— 没有定时任务，用户说一声才跑：
+
+```bash
+python3 scripts/sync-riding.py              # 三条链路一次跑完，窗口 day-2 ~ day-0
+python3 scripts/sync-riding.py --days 14   # 往前追更久
+python3 scripts/sync-riding.py --only igp  # 只跑某条链路
+python3 scripts/sync-riding.py --dry-run   # 试跑
+```
+
 **坐标系是四条链路最大的差异。** 不要因为"国内平台都用 GCJ-02"就一刀切 —— IGPSPORT 是个例外。
 
 ## 快速开始
@@ -118,7 +127,8 @@ cycling-source-upload-kit/
 │   ├── run-magene-igp-sync.py      # 链路 B cron 入口
 │   ├── strava-upload.py            # 链路 C 主脚本
 │   ├── strava-to-onelap.py         # 链路 D 主脚本（Strava → 迈金）
-│   ├── run-onelap-sync.py          # 链路 D cron 入口
+│   ├── run-onelap-sync.py          # 链路 D cron 入口（已停用）
+│   ├── sync-riding.py              # 手动同步入口：一次跑完三条链路
 │   ├── verify-no-drift.py          # 生产/skill/GitHub 三副本一致性校验
 │   ├── export-skill.sh             # 导出/发布（含密钥扫描）
 │   └── correct_*.py                # 坐标纠偏诊断工具
@@ -132,10 +142,11 @@ cron 在**上午 11 点**依次跑，窗口统一是 **day-2 ~ day-0**（前天+
 | 时间 | 脚本 | 方向 | 输出 |
 |---|---|---|---|
 | 11:00 | `run-github-trending-refresh.py` | 博客 Trending（非骑行） | 有变化才输出 |
-| 11:05 | `run-magene-igp-sync.py` | 迈金 → IGPSPORT | 有新同步才输出 |
-| 11:10 | `run-xingzhe-sync.py` | Strava → 行者 | 有新同步才输出 |
-| 11:15 | `run-onelap-sync.py` | Strava → 迈金 | 有新同步才输出 |
 | 11:20 | `run-ai-article-scrape.py` | AI 文章抓取（非骑行） | 有新文章才输出 |
+
+**骑行同步没有定时任务** —— 用 `sync-riding.py` 手动跑（一次三条链路）。
+`run-magene-igp-sync.py` / `run-xingzhe-sync.py` / `run-onelap-sync.py`
+三个 cron 入口保留在仓库里，但对应的 job 已暂停。
 
 > **为什么是 day-2~day-0 而不是 day-2 单日？**
 > - `day-1` 会漏掉「今天早上」骑的（一天两练时必然漏一条）
